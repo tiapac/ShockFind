@@ -2,6 +2,9 @@
 #include <cmath>
 #include <vector>
 #include <cstddef>
+#include <cstdio>
+#include <stdexcept>
+#include <string>
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Vec3: minimal 3-D double vector used throughout the shock analysis
@@ -97,6 +100,13 @@ struct GridAccessor {
 // in one place.
 template<typename T>
 inline T field_at(const T* data, const GridAccessor& g, const CellIndex& c) {
+    if (!g.in_bounds(c)) {
+        char msg[256];
+        std::snprintf(msg, sizeof(msg),
+            "field_at: index (%d,%d,%d) out of grid (%d,%d,%d)",
+            c.i, c.j, c.k, g.shape.nx, g.shape.ny, g.shape.nz);
+        throw std::out_of_range(msg);
+    }
     return data[g.flat(c)];
 }
 

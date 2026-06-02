@@ -15,3 +15,6 @@
 
 # Number of parallel compile jobs (defaults to all CPUs via nproc).
 # NPROC=8
+# Full path to the Python interpreter that has pybind11 installed.
+# Required when modules (e.g. R-bundle-CRAN) shadow the conda Python on PATH.
+# PYTHON=~/miniconda3/envs/pyxsim2/bin/python

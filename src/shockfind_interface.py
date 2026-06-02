@@ -394,13 +394,27 @@ class shock_finder(core):
                     _divV     = self.divV
                     _nablaRho = self.nablaRho
 
-                data, header = _cpp.characterise_shocks(
-                    self.shock_candidates,
-                    _Rho, _P, _B, _V, _divV, _nablaRho,
-                    self.extra,
-                    use_mpi=_use_mpi,
-                    quiet=quiet,
-                )
+                import sys as _sys, faulthandler as _fh
+                _fh.enable(file=_sys.stderr)
+                # Type/shape diagnostic — remove after fixing
+                for _name, _val in [("Rho",_Rho),("P",_P),("divV",_divV)]:
+                    print(f"  {_name}: type={type(_val).__name__} dtype={getattr(_val,'dtype','N/A')} shape={getattr(_val,'shape','N/A')}", file=_sys.stderr, flush=True)
+                for _name, _lst in [("B",_B),("V",_V),("nablaRho",_nablaRho)]:
+                    print(f"  {_name}: type={type(_lst).__name__} len={len(_lst)} elem0={type(_lst[0]).__name__} dtype={getattr(_lst[0],'dtype','N/A')}", file=_sys.stderr, flush=True)
+                print(f"  extra: type={type(self.extra).__name__}", file=_sys.stderr, flush=True)
+                print(f"  candidates[0]: {self.shock_candidates[0]} types={[type(x).__name__ for x in self.shock_candidates[0]]}", file=_sys.stderr, flush=True)
+                try:
+                    data, header = _cpp.characterise_shocks(
+                        self.shock_candidates,
+                        _Rho, _P, _B, _V, _divV, _nablaRho,
+                        self.extra,
+                        use_mpi=_use_mpi,
+                        quiet=quiet,
+                    )
+                except Exception as _e:
+                    print(f"\n[ShockFind C++ crash] rank={_rank}/{_size} "
+                          f"{type(_e).__name__}: {_e[:300]}", file=_sys.stderr, flush=True)
+                    raise
 
                 # Worker ranks: work is done, exit so rank 0 continues alone.
                 if _use_mpi and _rank != 0:
@@ -420,6 +434,14 @@ class shock_finder(core):
                 _log.warning("C++ backend not built — falling back to Python multiprocessing")
 
         # ── Python multiprocessing fallback ───────────────────────────────────────
+        # Guard fires here too: use_cpp=True but C++ import failed (ImportError path).
+        # Worker ranks never called load_data so self.Rho doesn't exist.
+        if _use_mpi:
+            raise RuntimeError(
+                f"C++ extension not found but MPI is active ({_size} ranks). "
+                f"Worker ranks have no data — Python multiprocessing cannot run under mpirun. "
+                f"Build the C++ extension (see CLAUDE.md) and re-run."
+            )
         _warnings.warn(
             "The Python multiprocessing backend (use_cpp=False / C++ extension not found) "
             "is deprecated and will be removed in a future release. "

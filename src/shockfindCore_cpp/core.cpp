@@ -453,11 +453,11 @@ std::vector<ShockResult> characterise_shocks(
         ShockResult r = characterise_shock(candidates[i], fields, params);
         results.push_back(r);
         if (!quiet) {
-            const char* stype = (r.family == 12) ? "FAST-shock"
-                              : (r.family == 34) ? "SLOW-shock"
-                              :                    "???-shock";
-            std::printf("(%d/%d) %s at (%d,%d,%d) flag=%d\n",
-                        i + 1, n, stype, r.loc_x, r.loc_y, r.loc_z, r.flag);
+            int print_every = std::max(1, n / 200);  // ~200 progress lines max
+            if (i % print_every == 0 || i == n - 1) {
+                std::printf("[%d/%d] %.1f%%\r", i + 1, n, 100.0 * (i + 1) / n);
+                std::fflush(stdout);
+            }
         }
     }
     return results;

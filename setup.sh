@@ -44,7 +44,12 @@ if [ "$CLEAN" -eq 1 ]; then
     [ "$#" -eq 1 ] && echo "==> Done." && exit 0
 fi
 
-PYBIND_DIR=$(python -c "import pybind11; print(pybind11.get_cmake_dir())")
+PYTHON="${PYTHON:-python3}"
+if ! "$PYTHON" -c "import pybind11" &>/dev/null; then
+    echo "ERROR: pybind11 not found in $PYTHON. Set PYTHON in build.local." >&2
+    exit 1
+fi
+PYBIND_DIR=$("$PYTHON" -c "import pybind11; print(pybind11.get_cmake_dir())")
 
 if [ "$USE_MPI" -eq 1 ]; then
     # Resolve MPI_HOME: build.local / env var → mpicxx on PATH → error.
