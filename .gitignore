@@ -5,6 +5,9 @@ data/
 stuff/
 pickled/
 
+# Machine-local build configuration (copy build.local.example to create)
+build.local
+
 
 
 

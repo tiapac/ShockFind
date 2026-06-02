@@ -1,1 +1,0 @@
-/usr/bin/c++ -fPIC -O3 -DNDEBUG -flto=auto -Wl,-rpath -Wl,/home/mattia/opt/openmpi/lib -Wl,--enable-new-dtags -shared  -o shockfindCore_cpp.cpython-310-x86_64-linux-gnu.so CMakeFiles/shockfindCore_cpp.dir/bindings.cpp.o  -Wl,-rpath,/home/mattia/opt/openmpi/lib: libshockcore.a /home/mattia/opt/openmpi/lib/libmpi.so 

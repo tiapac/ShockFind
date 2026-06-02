@@ -57,10 +57,7 @@ if __name__=="__main__":
             else: 
                 logger.error("no cache found, but this is a worker rank — this should not happen, check your setup")
                 raise RuntimeError("abort.")
-
-            #ds = an.analyse(outpath="/home/mattia/codes/CR/cr_particles_multip_MESS", outnumb=285)
-            ds = an.analyse(outpath="/home/mattia/codes/codici/Shockind_ground/data/", outnumb=outnumb)
-
+            ds = an.analyse(outpath="data/", outnumb=outnumb)
             dx   = (ds.width/2**level)[0].in_cgs().d
             dens, cube = ds.get_cube(level=level, field="density", ghost=1)
             if level > 8:
