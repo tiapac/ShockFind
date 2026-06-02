@@ -8,8 +8,10 @@ pickled/
 # Machine-local build configuration (copy build.local.example to create)
 build.local
 
-
-
+# C++ build artifacts
+src/shockfindCore_cpp/build/
+src/*.so
+src/*.pyd
 
 
 *.pk
