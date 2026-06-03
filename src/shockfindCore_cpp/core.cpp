@@ -453,9 +453,10 @@ std::vector<ShockResult> characterise_shocks(
         ShockResult r = characterise_shock(candidates[i], fields, params);
         results.push_back(r);
         if (!quiet) {
-            int print_every = std::max(1, n / 200);  // ~200 progress lines max
+            int print_every = std::max(1, n / 20);  // ~20 progress lines
             if (i % print_every == 0 || i == n - 1) {
-                std::printf("[%d/%d] %.1f%%\r", i + 1, n, 100.0 * (i + 1) / n);
+                std::printf("  [rank %d] %d/%d  (%.0f%%)\n",
+                            0, i + 1, n, 100.0 * (i + 1) / n);
                 std::fflush(stdout);
             }
         }

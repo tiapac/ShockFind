@@ -137,9 +137,9 @@ class shock_finder(core):
             if dx is None: 
                 raise Exception("If density gradient is not supplied, \
                 you must input a dx to compute the divergence runtime.")
-            nablaRho  = np.gradient(Rho, dx,edge_order=2)
-                
-        self.nablaRho    = nablaRho
+            nablaRho  = list(np.gradient(Rho, dx,edge_order=2))
+
+        self.nablaRho    = list(nablaRho)
         
         return  
      
@@ -396,13 +396,6 @@ class shock_finder(core):
 
                 import sys as _sys, faulthandler as _fh
                 _fh.enable(file=_sys.stderr)
-                # Type/shape diagnostic — remove after fixing
-                for _name, _val in [("Rho",_Rho),("P",_P),("divV",_divV)]:
-                    print(f"  {_name}: type={type(_val).__name__} dtype={getattr(_val,'dtype','N/A')} shape={getattr(_val,'shape','N/A')}", file=_sys.stderr, flush=True)
-                for _name, _lst in [("B",_B),("V",_V),("nablaRho",_nablaRho)]:
-                    print(f"  {_name}: type={type(_lst).__name__} len={len(_lst)} elem0={type(_lst[0]).__name__} dtype={getattr(_lst[0],'dtype','N/A')}", file=_sys.stderr, flush=True)
-                print(f"  extra: type={type(self.extra).__name__}", file=_sys.stderr, flush=True)
-                print(f"  candidates[0]: {self.shock_candidates[0]} types={[type(x).__name__ for x in self.shock_candidates[0]]}", file=_sys.stderr, flush=True)
                 try:
                     data, header = _cpp.characterise_shocks(
                         self.shock_candidates,
@@ -413,7 +406,7 @@ class shock_finder(core):
                     )
                 except Exception as _e:
                     print(f"\n[ShockFind C++ crash] rank={_rank}/{_size} "
-                          f"{type(_e).__name__}: {_e[:300]}", file=_sys.stderr, flush=True)
+                          f"{type(_e).__name__}: {str(_e)[:300]}", file=_sys.stderr, flush=True)
                     raise
 
                 # Worker ranks: work is done, exit so rank 0 continues alone.
@@ -501,23 +494,27 @@ class shock_finder(core):
         return self.computed_shocks, self.header
     
     def save_results(self, path=None, name=None):
-        if name is None: name = self.name 
-        if path is not None: path = "./"
-        print("Saving results to",name )
-        with open("%s/%s_result.pk"%(path,name), 'wb') as handle:
-                  pickle.dump([self.shocks,self.header], handle)
+        import os as _os
+        if name is None: name = self.name
+        if path is None: path = "./"
+        _os.makedirs(path, exist_ok=True)
+        # _log.info(f"Saving results to: {path}/{name}_result.pk")
+        with open(_os.path.join(path, name + "_result.pk"), 'wb') as handle:
+            pickle.dump([self.shocks, self.header], handle)
+        _log.info(f"Results saved to file: {path}/{name}_result.pk")
+        
         return
     @property
     def results(self):
-        return   self.shocks,self.header
-    def load_results(self,path=None, name=None):
-        if name is None: name = self.name 
-        if path is not None: path = "./"
-
-        with open("%s/%s_result.pk"%(path,name), 'rb') as handle:
-            self.shocks,self.header = pickle.load( handle)
+        return self.shocks, self.header
+    def load_results(self, path=None, name=None):
+        import os as _os
+        if name is None: name = self.name
+        if path is None: path = "./"
+        with open(_os.path.join(path, name + "_result.pk"), 'rb') as handle:
+            self.shocks, self.header = pickle.load(handle)
         self.shocks_data()
-        return self.shocks,self.header
+        return self.shocks, self.header
     
     def plot_candidates(self, ax = None, fig = None, alpha = 0.5, ss = 2):
         if fig == None: fig=plt.figure(figsize=(8,8))

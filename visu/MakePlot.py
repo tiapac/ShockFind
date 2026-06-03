@@ -1,7 +1,15 @@
-import numpy as np 
-import pickle as pk 
+import numpy as np
+import pickle as pk
 import pyvista as pv
 import sys
+import os
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, ROOT)
+
+from utils.logger import setup_logger
+_headless = not bool(os.environ.get("DISPLAY", ""))
+logger = setup_logger("MakePlot", level="INFO")
 # initialize actor list 
 
 class SetVisibilityCallback:
@@ -63,7 +71,7 @@ def add_vectors(plotter, sel_cond, func = np.log10, scale = 2, posy = 0.5, tol =
         vectors[:, 2] = nz.flatten()#/vnorm
         
         title="V_sh [ufunc(cm/s)]"#r"$v_{\rm sh}$ ufunc [$\rm{cm\,s^{-1}}$] "
-        #print("Vectors done.")
+        #logger.info("Vectors done.")
         gridcut["vectors"]  = vectors
         gridcut[title]      = func(vshocks.flatten())/scale
         gridcut.set_active_vectors("vectors")
@@ -104,7 +112,7 @@ def add_a_conditioned_grid(sel_cond         = True,
     point_cloud[title] = ufunc(family)/scale
     # Create a PyVista plotter
 
-    print("Building plot for index %s... "%title, end="")
+    logger.info("Building plot for index %s... "%title)
     
     
     if unicolor is not None: 
@@ -147,7 +155,7 @@ def add_a_conditioned_grid(sel_cond         = True,
                                      tol   = tol)
     
     actor_list.append(actor)
-    print("Done.")
+    logger.info("Done.")
     return
 
 class DiffuseSlider:
@@ -210,7 +218,7 @@ class PointSizeSlider:
         self.plotter = plotter
     
     def __call__(self, value):
-        #print("hhh")
+        #logger.info("hhh")
         self.output.GetProperty().SetPointSize(value)
         #self.update()
         return
@@ -230,33 +238,42 @@ if __name__ == "__main__":
 #    "./SB_plots/shocks+header.pk"
     with open(sys.argv[1], 'rb') as handle:
                 shocksfinder_results=  pk.load(handle)
+    # logger.info(shocksfinder_results[0])
+    logger.info(shocksfinder_results[1][1])
+    # exit()
     shocks = shocksfinder_results[0]
-    header = shocksfinder_results[1]        
+    header = shocksfinder_results[1][1]        
                                            # both types   # no error flags     # only conv. peaked at the center
-    print("The data contains:\n",
-    "0  - x coordinate shock location\n",
-    "1  - y coordinate shock location\n",
-    "2  - z coordinate shock location\n",
-    "3  - x component of propagation vector\n",
-    "4  - y component of propagation vector\n",
-    "5  - z component of propagation vector\n",
-    "6  - shock family  12 for fast, 34 for slow\n",
-    "7  - vs: shock speed in km/s\n", 
-    "8  - va: preshock Alfven velocity in km/s\n", 
-    "9  - MachAlf: Alfvenic mach number\n", 
-    "10 - r: compression ratio\n", 
-    "11 - rho0: preshock density in g/cm^3\n", 
-    "12 - B0: preshock magnetic field strength in microG\n", 
-    "13 - pmag_ratio: ratio of postshock to preshock magnetic pressure\n")
+    msg = "The data contains:\n"
+    msg +="0  - x coordinate shock location\n"
+    msg +="1  - y coordinate shock location\n"
+    msg +="2  - z coordinate shock location\n"
+    msg +="3  - x component of propagation vector\n"
+    msg +="4  - y component of propagation vector\n"
+    msg +="5  - z component of propagation vector\n"
+    msg +="6  - shock family  12 for fast, 34 for slow\n"
+    msg +="7  - vs: shock speed in km/s\n"
+    msg +="8  - va: preshock Alfven velocity in km/s\n" 
+    msg +="9  - MachAlf: Alfvenic mach number\n"
+    msg +="10 - r: compression ratio\n"
+    msg +="11 - rho0: preshock density in g/cm^3\n" 
+    msg +="12 - B0: preshock magnetic field strength in microG\n" 
+    msg +="13 - pmag_ratio: ratio of postshock to preshock magnetic pressure\n"
+    
+    
+    logger.info(msg)
     cond   =True # np.logical_and(np.logical_and( shocks[6] > 0,    shocks[15]==0),    shocks[14]==1)
     cond2 = np.logical_and( shocks[1] >120, shocks[1] <128 )
     cond = np.logical_and(cond, cond2)
 
+    pv.OFF_SCREEN = _headless  # must be set before creating the plotter
+    logger.info("Creating plotter...")
     plotter = pv.Plotter()
     add_a_conditioned_grid(sel_cond = shocks[6]==12, title = "FS", color = "blue",posy = size*2+size//10, unicolor = "blue" ,inistate = True, add_vector_field=True)
     add_a_conditioned_grid(sel_cond = shocks[6]==34, title = "SS", color = "red", posy = size*3+size//10, unicolor = "red"  ,inistate = True, add_vector_field=True)
     pos = 4
     for i in range(7,14):
+        logger.info(f"Adding plot for index {i} - {header[i]}...")
         add_a_conditioned_grid(sel_cond = shocks[7] > 1e5, # only shocks moving at at least a km/s
                             qidx     = i,
                             title    = header[i],
@@ -267,50 +284,41 @@ if __name__ == "__main__":
                             add_vector_field = False)
         pos+=1
 
-    #plotter.show()    
     plotter.set_background("black")
+    logger.info("Plotter created.")
     plotter.show_bounds(    color     = "white",
                             bold      = False,
-                            location  = 'outer',                       
-                            ticks     = 'both',                       
-                            n_xlabels = 4,                        
-                            n_ylabels = 4,                        
-                            n_zlabels = 4,                        
-                            xtitle    = "x",                       
-                            ytitle    = "y",                      
-                            ztitle    = "z",    
+                            location  = 'outer',
+                            ticks     = 'both',
+                            n_xlabels = 4,
+                            n_ylabels = 4,
+                            n_zlabels = 4,
+                            xtitle    = "x",
+                            ytitle    = "y",
+                            ztitle    = "z",
                             font_size = 20,
                             )
-    engineD = apply_allD(actor_list,plotter)
-        #
-    plotter.add_slider_widget(
-        callback     = lambda value: engineD(10**value),
-        rng          = [-2, 0],
-        value        = -1,
-        title        = "Log10(Diffuse)",
-        pointa       = (0.8, 0.8),
-        pointb       = (1.0, 0.8),
-        title_height = 0.03,
-        title_color  = "white",
-        color        = "white",
-        slider_width = 0.01,
-        tube_width   = 0.001
-        
-    )
-    #engineS = apply_allS(actor_list,plotter)
-    #
-    #plotter.add_slider_widget(
-    #    callback     = lambda value: engineS(value),
-    #    rng          = [0, 100],
-    #    value        = 0.2,
-    #    title        = "Point size",
-    #    pointa       = (0.8, 0.6),
-    #    pointb       = (1.0, 0.6),
-    #    title_height = 0.03,
-    #    title_color  = "white",
-    #    color        = "white",
-    #    slider_width = 0.01,
-    #    tube_width   = 0.001
-    #    
-    #)
-    plotter.show()
+
+    if not _headless:
+        engineD = apply_allD(actor_list, plotter)
+        plotter.add_slider_widget(
+            callback     = lambda value: engineD(10**value),
+            rng          = [-2, 0],
+            value        = -1,
+            title        = "Log10(Diffuse)",
+            pointa       = (0.8, 0.8),
+            pointb       = (1.0, 0.8),
+            title_height = 0.03,
+            title_color  = "white",
+            color        = "white",
+            slider_width = 0.01,
+            tube_width   = 0.001,
+        )
+
+    out_png = sys.argv[1].replace("_result.pk", "_3Dplot.png")
+    logger.info("Rendering plot...")
+    plotter.show(screenshot    = out_png,
+                 window_size   = [2048, 2048],
+                 auto_close    = _headless,
+                 interactive   = not _headless)
+    logger.info(f"Screenshot saved: {out_png}")

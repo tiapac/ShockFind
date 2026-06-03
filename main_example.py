@@ -27,7 +27,7 @@ setup_logger("ShockFind",            level=loglevels.INFO)   # show ShockFind li
 
 
 level= 8
-outnumb = 25
+outnumb = 21
 
 analysis_name = "LB_double"
 analysis_name += "lvl_%02d_%05d"%(level, outnumb)
@@ -37,7 +37,7 @@ SNAPSHOT_PREFIX = f"output_{outnumb:05d}"
 
 
 
-DATA_PATH = "/mnt/beegfs/projects/hpcc250512a2/mpacicco/simulations/BarrosBugFix/outputs_blowoutOK_double/"
+DATA_PATH = "/mnt/beegfs/projects/hpcc250512a2/mpacicco/simulations/BarrosBugFix/outputs_BlowoutHighRes11_only/"
 snap_path  = DATA_PATH + SNAPSHOT_PREFIX
 
 RESULTS_PATH = DATA_PATH + "shockfind_results/"
@@ -173,6 +173,7 @@ if __name__=="__main__":
         
         # save the results to file for later inspection 
         shocksfinder.save_results(path=RESULTS_PATH, name=analysis_name)
+        
     #finally:
     # make a 3D plot with all the shocks found
     #shocksfinder.plot3D(types="sf", alpha=0.1, ss=1)
@@ -195,6 +196,9 @@ if __name__=="__main__":
     # header=shocksfinder_results[1][1]
     # with open(f"{RESULTS_PATH}/{analysis_name}_shocks+header_{level}.pkl", 'wb') as handle:
     #               pickle.dump([shocks,header], handle)
-    shocksfinder.plot3D(types = "fs")
+    ax, fig = shocksfinder.plot3D(types = "fs")
+    os.makedirs(RESULTS_PATH, exist_ok=True)
+    fig.savefig(f"{RESULTS_PATH}/{analysis_name}_3Dplot_{level}.png", dpi=300)
+    logger.info(f"3D plot saved to file: {RESULTS_PATH}/{analysis_name}_3Dplot_{level}.png")
     # plt.show(a)
     quit()
