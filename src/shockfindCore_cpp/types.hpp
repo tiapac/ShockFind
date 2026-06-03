@@ -38,13 +38,15 @@ inline Vec3 operator*(double s, const Vec3& v) { return v * s; }
 // CellIndex — extensible cell address.
 //
 // On a uniform Cartesian grid this is simply (i, j, k).
-// For a future AMR octree, add level and/or a node pointer here; every
-// function that walks the grid goes through GridAccessor::line_step /
-// GridAccessor::cyl_offset, so nothing else needs to change.
+// AMR octree fields default to -1 so all existing GridAccessor code paths
+// remain unaffected (leaf_id == -1 means uniform-grid mode).
 // ─────────────────────────────────────────────────────────────────────────────
 struct CellIndex {
     int i = 0, j = 0, k = 0;
-    // future octree fields: int level; uint64_t oct_id; ...
+    // AMR octree extension (leaf_id == -1 → uniform grid path)
+    int    leaf_id = -1;
+    int    level   = -1;
+    double cx = 0.0, cy = 0.0, cz = 0.0;  // physical centre in [0,1]^3
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -96,25 +98,28 @@ struct GridAccessor {
     }
 };
 
-// Typed field access through the accessor — keeps raw pointer arithmetic
-// in one place.
-template<typename T>
-inline T field_at(const T* data, const GridAccessor& g, const CellIndex& c) {
+// Typed field access through the accessor — works with any GridAccessor-like type.
+// The accessor must provide in_bounds(CellIndex) and flat(CellIndex).
+template<typename T, typename G>
+inline T field_at(const T* data, const G& g, const CellIndex& c) {
     if (!g.in_bounds(c)) {
         char msg[256];
         std::snprintf(msg, sizeof(msg),
-            "field_at: index (%d,%d,%d) out of grid (%d,%d,%d)",
-            c.i, c.j, c.k, g.shape.nx, g.shape.ny, g.shape.nz);
+            "field_at: cell out of bounds (leaf_id=%d, i=%d, j=%d, k=%d)",
+            c.leaf_id, c.i, c.j, c.k);
         throw std::out_of_range(msg);
     }
     return data[g.flat(c)];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FieldData — all simulation fields needed by the shock algorithm.
-// Pointers are non-owning (borrowed from the Python/NumPy arrays).
+// FieldDataT<G> — all simulation fields needed by the shock algorithm.
+// Templated on the accessor type G so the same struct layout works for both
+// the uniform-grid (G=GridAccessor) and AMR-octree (G=OctaveGridAccessor) paths.
+// Pointers are non-owning (borrowed from the Python/NumPy arrays or tree data).
 // ─────────────────────────────────────────────────────────────────────────────
-struct FieldData {
+template<typename G = GridAccessor>
+struct FieldDataT {
     const double* rho    = nullptr;
     const double* pres   = nullptr;
     const double* vx     = nullptr;
@@ -127,8 +132,11 @@ struct FieldData {
     const double* grad_x = nullptr;  // ∇ρ components
     const double* grad_y = nullptr;
     const double* grad_z = nullptr;
-    GridAccessor  grid;
+    G grid;
 };
+
+// Backward-compatible alias — all existing code that uses FieldData unchanged.
+using FieldData = FieldDataT<GridAccessor>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ShockParams — mirrors the Python `extra` dict passed to characterise_shocks.
