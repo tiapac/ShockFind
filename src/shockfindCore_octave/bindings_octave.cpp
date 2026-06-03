@@ -342,6 +342,8 @@ static py::tuple py_characterise_shocks_octree(
     results.reserve(candidate_node_indices.size());
     int n = static_cast<int>(candidate_node_indices.size());
 
+    const int max_depth = tree.maxDepth;
+
     for (int ci = 0; ci < n; ++ci) {
         int nidx = candidate_node_indices[static_cast<size_t>(ci)];
         if (nidx < 0 || nidx >= static_cast<int>(tree.nodes.size()) || !tree.nodes[nidx].isLeaf) {
@@ -351,6 +353,16 @@ static py::tuple py_characterise_shocks_octree(
         }
         CellIndex candidate = acc.make_from_node(nidx);
         ShockResult r = characterise_shock(candidate, fields, params);
+
+        // Overwrite position with finest-level integer grid coords so shock_finder's
+        // shocks_data() / plot3D() work: loc * (1/2^max_depth) → physical position.
+        {
+            const auto& nd = tree.nodes[static_cast<size_t>(nidx)];
+            const int shift = max_depth - nd.level;
+            r.loc_x = nd.coord.x << shift;
+            r.loc_y = nd.coord.y << shift;
+            r.loc_z = nd.coord.z << shift;
+        }
         results.push_back(r);
         if (!quiet) {
             int print_every = std::max(1, n / 20);
@@ -373,7 +385,12 @@ PYBIND11_MODULE(shockfindCore_octave, m) {
         .def_property_readonly("num_leaves",
             [](const OctreeHandle& h) { return h.tree->numLeaves(); })
         .def_property_readonly("num_nodes",
-            [](const OctreeHandle& h) { return h.tree->nodes.size(); });
+            [](const OctreeHandle& h) { return h.tree->nodes.size(); })
+        .def_property_readonly("max_depth",
+            [](const OctreeHandle& h) { return h.tree->maxDepth; })
+        .def_property_readonly("cell_size",
+            // Finest-level cell size in [0,1]^3 — use as dx when calling shocks_data()
+            [](const OctreeHandle& h) { return 1.0 / (1 << h.tree->maxDepth); });
 
     m.def("build_octree", &build_octree,
           py::arg("positions"),

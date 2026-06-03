@@ -1,11 +1,20 @@
 """
-octree_shockfind_pipeline.py — Python entry point for the Octave-backed ShockFind pipeline.
+octree_shockfind_pipeline.py — CLI and library entry point for the Octave-backed ShockFind pipeline.
 
-All heavy computation (octree build, candidate finding, shock characterisation) happens
-in C++ via shockfindCore_octave.  This module handles only the preparatory I/O steps:
+Mirrors the workflow of main_example.py but uses Octave's AMR octree instead of a
+uniform covering grid.  Heavy computation (tree build, candidates, characterisation)
+is fully in C++ via shockfindCore_octave.  Results are saved/loaded/plotted through
+the existing shock_finder machinery so all downstream analysis tools work unchanged.
 
-  1. load_ramses_for_shockfind()  — RAMSES → numpy arrays via yt
-  2. run_octree_pipeline()        — orchestrate build + find + characterise
+Usage (standalone):
+    python src/octree_shockfind_pipeline.py /path/to/ramses/output_00021 \\
+        --output /path/to/results/ --name my_run
+
+Usage (library):
+    from src.octree_shockfind_pipeline import run_octree_pipeline
+    handle, sf = run_octree_pipeline("/path/to/output_00021")
+    sf.save_results(path="results/", name="run01")
+    sf.plot3D()
 """
 
 from __future__ import annotations
@@ -13,11 +22,11 @@ from __future__ import annotations
 import os
 import sys
 import importlib
-import subprocess
 import numpy as np
+import pickle
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Lazy imports (yt may not be installed in all environments)
+# Imports
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _require(name: str, hint: str):
@@ -28,37 +37,54 @@ def _require(name: str, hint: str):
 
 
 def _import_shockfind_octave():
-    """Import (and optionally build) the shockfindCore_octave extension."""
+    """Import the shockfindCore_octave C++ extension."""
+    # Try installed / on PYTHONPATH first
     try:
         import shockfindCore_octave
         return shockfindCore_octave
     except ImportError:
         pass
-    # Try to find the .so in the src directory
-    src_dir = os.path.dirname(__file__)
-    so_dir  = os.path.join(src_dir, "shockfindCore_octave")
-    build_dir = os.path.join(so_dir, "build")
-    if not os.path.isdir(so_dir):
-        raise RuntimeError(
-            "shockfindCore_octave not found. Build it with:\n"
-            f"  cmake -B {build_dir} -S {so_dir} && cmake --build {build_dir} -j$(nproc)\n"
-            "Then install or add the build dir to PYTHONPATH."
-        )
+    # Try the build directory next to this file
+    src_dir = os.path.dirname(os.path.abspath(__file__))
+    build_so = os.path.join(src_dir, "shockfindCore_octave", "build")
+    if os.path.isdir(build_so):
+        sys.path.insert(0, build_so)
+        try:
+            import shockfindCore_octave
+            return shockfindCore_octave
+        except ImportError:
+            sys.path.pop(0)
     raise ImportError(
-        "shockfindCore_octave extension not importable. Build it first:\n"
-        f"  cmake -B {build_dir} -S {so_dir} "
-        f"-DOCTAVE_SRC_DIR=/path/to/Octave/src\n"
-        f"  cmake --build {build_dir} -j$(nproc)"
+        "shockfindCore_octave not found. Build it with:\n"
+        "  ./setup.sh --octave [--octave-src /path/to/Octave/src]"
     )
 
 
+def _import_shock_finder():
+    """Import shock_finder, trying both installed and local paths."""
+    try:
+        from ShockFind import shock_finder as sf_cls
+        return sf_cls
+    except ImportError:
+        pass
+    try:
+        from src.shockfind_interface import shock_finder as sf_cls
+        return sf_cls
+    except ImportError:
+        pass
+    # Running from ShockFind root
+    src_dir = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, os.path.dirname(src_dir))
+    from src.shockfind_interface import shock_finder as sf_cls
+    return sf_cls
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Required MHD field names (order defines the attribute column layout)
+# MHD field layout (order = attribute column index in the attrs matrix)
 # ─────────────────────────────────────────────────────────────────────────────
 
 SHOCKFIND_FIELDS = ["density", "pressure", "vx", "vy", "vz", "bx", "by", "bz"]
 
-# Mapping from ShockFind canonical names to common RAMSES yt field names
 _RAMSES_FIELD_MAP = {
     "density":  [("gas","density")],
     "pressure": [("gas","pressure"), ("gas","Pressure")],
@@ -71,22 +97,17 @@ _RAMSES_FIELD_MAP = {
 }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Data loading
+# ─────────────────────────────────────────────────────────────────────────────
+
 def load_ramses_for_shockfind(
     info_path: str,
     box=None,
     box_units: str = "code",
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Load a RAMSES snapshot and extract gas cell centres + MHD field values.
-
-    Parameters
-    ----------
-    info_path : str
-        Path to RAMSES output directory or info_*.txt file.
-    box : sequence of 6 floats or None
-        Optional bounding box [xmin, xmax, ymin, ymax, zmin, zmax].
-    box_units : 'code' | 'normalized'
-        Units for the box coordinates.
+    Load RAMSES gas cell centres + MHD field values via yt.
 
     Returns
     -------
@@ -95,7 +116,6 @@ def load_ramses_for_shockfind(
     """
     yt = _require("yt", "Install yt: pip install yt (or conda install -c conda-forge yt)")
 
-    # Find info file
     if os.path.isfile(info_path):
         info = info_path
     else:
@@ -121,7 +141,7 @@ def load_ramses_for_shockfind(
         np.clip((z - le[2]) / w[2], 0.0, 1.0),
     ])
 
-    # Optional box filter
+    mask = None
     if box is not None:
         bx = np.array(box, dtype=float)
         if box_units == "code":
@@ -135,14 +155,13 @@ def load_ramses_for_shockfind(
         )
         positions = positions[mask]
 
-    # Gather field columns
     cols = []
     for name in SHOCKFIND_FIELDS:
         val = None
         for yt_key in _RAMSES_FIELD_MAP[name]:
             if yt_key in ds.field_list:
                 arr = np.asarray(ad[yt_key], dtype=float)
-                if box is not None:
+                if mask is not None:
                     arr = arr[mask]
                 val = arr
                 break
@@ -152,16 +171,17 @@ def load_ramses_for_shockfind(
         cols.append(val)
 
     attrs = np.column_stack(cols)
-    print(f"Loaded {positions.shape[0]:,} RAMSES cells with {len(SHOCKFIND_FIELDS)} MHD fields")
+    print(f"Loaded {positions.shape[0]:,} RAMSES cells  ({len(SHOCKFIND_FIELDS)} MHD fields)")
     return positions.astype(np.float64, copy=False), attrs.astype(np.float64, copy=False)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Full pipeline
+# Full pipeline — returns (OctreeHandle, shock_finder)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_octree_pipeline(
     info_path: str,
+    name: str = "octree_run",
     *,
     box=None,
     box_units: str = "code",
@@ -177,30 +197,20 @@ def run_octree_pipeline(
     """
     End-to-end pipeline: RAMSES → octree → candidates → shock results.
 
-    Parameters
-    ----------
-    info_path     : RAMSES output directory or info file
-    box / box_units : optional spatial sub-region
-    max_depth, min_depth, max_members, max_nodes : octree parameters
-      max_members=1 preserves the RAMSES AMR structure exactly.
-    div_threshold : candidate threshold on div(v) (negative = converging flow)
-    grad_threshold: candidate threshold on |∇ρ|/ρ (dimensionless)
-    shock_params  : dict forwarded to characterise_shocks_octree (same as `extra` dict)
-    quiet         : suppress per-candidate progress output
-
     Returns
     -------
-    handle   : OctreeHandle — the built octree (reusable for further queries)
-    candidates: list[int]  — leaf node indices that passed the candidate filter
-    results  : (data, header) tuple — 17-array shock result in standard ShockFind layout
+    handle : OctreeHandle  — built octree (reusable for further queries)
+    sf     : shock_finder  — populated with results; call sf.save_results(),
+                             sf.plot3D(), sf.histograms() etc. as in main_example.py
     """
     sco = _import_shockfind_octave()
+    shock_finder = _import_shock_finder()
 
-    # 1. Load RAMSES
+    # 1. Load RAMSES data
     positions, attrs = load_ramses_for_shockfind(info_path, box=box, box_units=box_units)
 
     # 2. Build octree
-    print("Building octree...")
+    print("Building octree …")
     handle = sco.build_octree(
         positions, attrs, SHOCKFIND_FIELDS,
         max_depth=max_depth,
@@ -208,58 +218,119 @@ def run_octree_pipeline(
         max_members=max_members,
         max_nodes=max_nodes,
     )
-    print(f"Octree: {handle.num_leaves:,} leaves, {handle.num_nodes:,} nodes")
+    print(f"  {handle.num_leaves:,} leaves  {handle.num_nodes:,} nodes  "
+          f"(dx = 1/{1 << handle.max_depth} = {handle.cell_size:.3e})")
 
-    # 3. Find candidates
-    print("Finding shock candidates...")
+    # 3. Find shock candidates
+    print("Finding candidates …")
     candidates = sco.find_candidates(handle, div_threshold, grad_threshold)
-    print(f"Found {len(candidates):,} candidate leaves")
+    print(f"  {len(candidates):,} candidate leaves")
 
     # 4. Characterise shocks
-    print("Characterising shocks...")
+    print("Characterising shocks …")
     params = shock_params or {}
-    results = sco.characterise_shocks_octree(handle, candidates, params, quiet)
+    data, header = sco.characterise_shocks_octree(handle, candidates, params, quiet)
 
-    return handle, candidates, results
+    # 5. Wire into shock_finder for save/load/plot compatibility
+    sf = shock_finder(name=name)
+    sf.shocks = data
+    sf.header = header
+    # dx in physical units: positions are in [0,1]^3 on a 2^max_depth grid
+    sf.shocks_data(dx=handle.cell_size)
+
+    return handle, sf
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CLI entry point (for quick testing)
+# CLI — mirrors main_example.py usage
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Octave-backed ShockFind pipeline")
-    parser.add_argument("data_path", help="RAMSES output directory or info_*.txt")
-    parser.add_argument("--max-depth",   type=int,   default=14)
-    parser.add_argument("--min-depth",   type=int,   default=3)
-    parser.add_argument("--max-members", type=int,   default=1)
-    parser.add_argument("--max-nodes",   type=int,   default=100_000_000)
+    parser = argparse.ArgumentParser(
+        description="ShockFind on a RAMSES output using Octave AMR octree (no uniform grid)")
+    parser.add_argument("data_path",
+        help="RAMSES output directory (e.g. output_00021/) or info_*.txt path")
+    parser.add_argument("-out", "--output", default=None,
+        help="Directory to save results (default: <data_path>/shockfind_results/)")
+    parser.add_argument("-name", "--name", default=None,
+        help="Run name used for the output file (default: derived from data_path)")
+    parser.add_argument("--max-depth",    type=int,   default=14)
+    parser.add_argument("--min-depth",    type=int,   default=3)
+    parser.add_argument("--max-members",  type=int,   default=1,
+        help="Max points per octree leaf; 1 mirrors RAMSES AMR structure exactly")
+    parser.add_argument("--max-nodes",    type=int,   default=100_000_000)
     parser.add_argument("--div-threshold",  type=float, default=-0.1,
-                        help="Divergence threshold for candidates (default: -0.1)")
+        help="div(v) threshold for candidates (default: -0.1, dimensionless)")
     parser.add_argument("--grad-threshold", type=float, default=0.1,
-                        help="Dimensionless density gradient threshold (default: 0.1)")
-    parser.add_argument("--quiet",  action="store_true")
+        help="|∇ρ|/ρ threshold for candidates (default: 0.1, dimensionless)")
+    parser.add_argument("--gamma", type=float, default=5.0/3.0)
+    parser.add_argument("--no-periodic", action="store_true",
+        help="Treat domain boundaries as non-periodic")
+    parser.add_argument("-load", "--load", action="store_true",
+        help="Load previously saved results instead of running the analysis")
+    parser.add_argument("--plot",  action="store_true", help="Show 3D shock plot after analysis")
+    parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
 
-    handle, candidates, results = run_octree_pipeline(
-        args.data_path,
-        max_depth=args.max_depth,
-        min_depth=args.min_depth,
-        max_members=args.max_members,
-        max_nodes=args.max_nodes,
-        div_threshold=args.div_threshold,
-        grad_threshold=args.grad_threshold,
-        quiet=args.quiet,
-    )
-    data, header = results
-    print(f"Characterised {len(data[0])} shocks")
-    # Print a simple summary of non-flagged results
-    flags = np.asarray(data[16])
-    families = np.asarray(data[6])
-    print(f"  OK (flag=0): {(flags==0).sum()}")
-    print(f"  Fast (family=12): {(families==12).sum()}")
-    print(f"  Slow (family=34): {(families==34).sum()}")
+    # Resolve output dir and run name
+    data_path = os.path.abspath(args.data_path)
+    if args.output:
+        results_path = args.output
+    else:
+        results_path = os.path.join(os.path.dirname(data_path), "shockfind_results")
+
+    if args.name:
+        run_name = args.name
+    else:
+        run_name = "octree_" + os.path.basename(data_path.rstrip("/"))
+
+    os.makedirs(results_path, exist_ok=True)
+
+    shock_finder = _import_shock_finder()
+
+    if args.load:
+        sf = shock_finder(name=run_name)
+        sf.load_results(path=results_path, name=run_name)
+        print(f"Loaded results from {results_path}/{run_name}_result.pk")
+        handle = None
+    else:
+        shock_params = {
+            "gamma":    args.gamma,
+            "periodic": [not args.no_periodic] * 3,
+        }
+        handle, sf = run_octree_pipeline(
+            data_path,
+            name=run_name,
+            max_depth=args.max_depth,
+            min_depth=args.min_depth,
+            max_members=args.max_members,
+            max_nodes=args.max_nodes,
+            div_threshold=args.div_threshold,
+            grad_threshold=args.grad_threshold,
+            shock_params=shock_params,
+            quiet=args.quiet,
+        )
+        sf.save_results(path=results_path, name=run_name)
+        print(f"Results saved to {results_path}/{run_name}_result.pk")
+
+    # Summary
+    shocks = sf.shocks
+    flags    = np.asarray(shocks[16])
+    families = np.asarray(shocks[6])
+    total    = len(flags)
+    ok       = int((flags == 0).sum())
+    fast     = int((families == 12).sum())
+    slow     = int((families == 34).sum())
+    print(f"\nTotal characterised: {total}  |  OK (flag=0): {ok}  |  Fast: {fast}  |  Slow: {slow}")
+
+    if args.plot:
+        import matplotlib.pyplot as plt
+        ax, fig = sf.plot3D(types="fs")
+        fig_path = os.path.join(results_path, f"{run_name}_3Dplot.png")
+        fig.savefig(fig_path, dpi=150)
+        print(f"3D plot saved to {fig_path}")
+        plt.show()
 
 
 if __name__ == "__main__":
