@@ -263,7 +263,7 @@ if __name__ == "__main__":
     
     logger.info(msg)
     cond   =True # np.logical_and(np.logical_and( shocks[6] > 0,    shocks[15]==0),    shocks[14]==1)
-    cond2 = np.logical_and( shocks[1] >120, shocks[1] <128 )
+    cond2 = True # np.logical_and( shocks[1] >120, shocks[1] <128 )
     cond = np.logical_and(cond, cond2)
 
     pv.OFF_SCREEN = _headless  # must be set before creating the plotter
