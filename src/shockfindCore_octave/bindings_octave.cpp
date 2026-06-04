@@ -129,8 +129,7 @@ static std::shared_ptr<OctreeHandle> build_octree(
         pts.push_back(std::move(pt));
     }
 
-    tree.buildFromPoints(std::move(pts));
-    tree.computeOrderedLeaves();
+    tree.buildFromPoints(std::move(pts));  // includes computeOrderedLeaves() internally
 
     // Resolve field pointers by name
     auto res = [&](const std::vector<std::string>& candidates) -> const double* {
@@ -376,8 +375,47 @@ static py::tuple py_characterise_shocks_octree(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// compute_gradient_of
+// Compute ∇f on the octree for an arbitrary per-leaf field array f.
+// f must be a 1-D float64 array of length == handle.num_leaves (Hilbert order).
+// Returns (gx, gy, gz) — same layout, same units as the pre-computed grad_rho_*.
+// ─────────────────────────────────────────────────────────────────────────────
+static py::tuple compute_gradient_of(
+    std::shared_ptr<OctreeHandle> handle,
+    py::array_t<double, py::array::c_style | py::array::forcecast> field_arr)
+{
+    MainTree<3>& tree = *handle->tree;
+    const size_t n = tree.ordered_leaf_indices.size();
+    if (static_cast<size_t>(field_arr.shape(0)) != n)
+        throw std::runtime_error("field_arr length must equal handle.num_leaves");
+
+    const std::string scratch = "__grad_tmp__";
+    const double* raw = field_arr.data();
+    tree.leafFieldData[scratch].assign(raw, raw + n);
+
+    auto [gx, gy, gz] = computeLeafGradientComponents(tree, scratch);
+    tree.leafFieldData.erase(scratch);
+
+    auto to_arr = [](std::vector<double>& v) {
+        auto a = py::array_t<double>(v.size());
+        std::copy(v.begin(), v.end(), a.mutable_data());
+        return a;
+    };
+    return py::make_tuple(to_arr(gx), to_arr(gy), to_arr(gz));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Module definition
 // ─────────────────────────────────────────────────────────────────────────────
+
+// Helper: copy a raw pointer array into a new numpy array (safe; avoids lifetime issues).
+static py::array_t<double> ptr_to_arr(const double* ptr, size_t n) {
+    if (!ptr || n == 0) return py::array_t<double>(0);
+    auto a = py::array_t<double>(n);
+    std::copy(ptr, ptr + n, a.mutable_data());
+    return a;
+}
+
 PYBIND11_MODULE(shockfindCore_octave, m) {
     m.doc() = "ShockFind backend using Octave's AMR octree instead of a uniform grid";
 
@@ -389,8 +427,74 @@ PYBIND11_MODULE(shockfindCore_octave, m) {
         .def_property_readonly("max_depth",
             [](const OctreeHandle& h) { return h.tree->maxDepth; })
         .def_property_readonly("cell_size",
-            // Finest-level cell size in [0,1]^3 — use as dx when calling shocks_data()
-            [](const OctreeHandle& h) { return 1.0 / (1 << h.tree->maxDepth); });
+            [](const OctreeHandle& h) { return 1.0 / (1 << h.tree->maxDepth); })
+        // ── Per-leaf field arrays (Hilbert order, length == num_leaves) ──────
+        .def_property_readonly("rho_arr",
+            [](const OctreeHandle& h) {
+                return ptr_to_arr(h.rho, h.tree->ordered_leaf_indices.size()); })
+        .def_property_readonly("pres_arr",
+            [](const OctreeHandle& h) {
+                return ptr_to_arr(h.pres, h.tree->ordered_leaf_indices.size()); })
+        .def_property_readonly("vx_arr",
+            [](const OctreeHandle& h) {
+                return ptr_to_arr(h.vx, h.tree->ordered_leaf_indices.size()); })
+        .def_property_readonly("vy_arr",
+            [](const OctreeHandle& h) {
+                return ptr_to_arr(h.vy, h.tree->ordered_leaf_indices.size()); })
+        .def_property_readonly("vz_arr",
+            [](const OctreeHandle& h) {
+                return ptr_to_arr(h.vz, h.tree->ordered_leaf_indices.size()); })
+        .def_property_readonly("bx_arr",
+            [](const OctreeHandle& h) {
+                return ptr_to_arr(h.bx, h.tree->ordered_leaf_indices.size()); })
+        .def_property_readonly("by_arr",
+            [](const OctreeHandle& h) {
+                return ptr_to_arr(h.by, h.tree->ordered_leaf_indices.size()); })
+        .def_property_readonly("bz_arr",
+            [](const OctreeHandle& h) {
+                return ptr_to_arr(h.bz, h.tree->ordered_leaf_indices.size()); })
+        // ── Pre-computed derived arrays ──────────────────────────────────────
+        .def_property_readonly("div_v_arr",
+            [](const OctreeHandle& h) {
+                auto a = py::array_t<double>(h.div_v.size());
+                std::copy(h.div_v.begin(), h.div_v.end(), a.mutable_data());
+                return a; })
+        .def_property_readonly("grad_rho_x",
+            [](const OctreeHandle& h) {
+                auto a = py::array_t<double>(h.grad_x.size());
+                std::copy(h.grad_x.begin(), h.grad_x.end(), a.mutable_data());
+                return a; })
+        .def_property_readonly("grad_rho_y",
+            [](const OctreeHandle& h) {
+                auto a = py::array_t<double>(h.grad_y.size());
+                std::copy(h.grad_y.begin(), h.grad_y.end(), a.mutable_data());
+                return a; })
+        .def_property_readonly("grad_rho_z",
+            [](const OctreeHandle& h) {
+                auto a = py::array_t<double>(h.grad_z.size());
+                std::copy(h.grad_z.begin(), h.grad_z.end(), a.mutable_data());
+                return a; })
+        // ── Leaf topology ────────────────────────────────────────────────────
+        .def_property_readonly("leaf_node_indices",
+            // Node indices in Hilbert order (maps Hilbert rank → node index in tree.nodes).
+            [](const OctreeHandle& h) {
+                const auto& v = h.tree->ordered_leaf_indices;
+                auto a = py::array_t<int>(v.size());
+                auto buf = a.mutable_unchecked<1>();
+                for (size_t i = 0; i < v.size(); ++i)
+                    buf[static_cast<py::ssize_t>(i)] = static_cast<int>(v[i]);
+                return a; })
+        .def_property_readonly("leaf_levels",
+            // AMR level of each leaf in Hilbert order.
+            [](const OctreeHandle& h) {
+                const auto& tree = *h.tree;
+                const size_t n = tree.ordered_leaf_indices.size();
+                auto a = py::array_t<int>(n);
+                auto buf = a.mutable_unchecked<1>();
+                for (size_t i = 0; i < n; ++i)
+                    buf[static_cast<py::ssize_t>(i)] =
+                        tree.nodes[tree.ordered_leaf_indices[i]].level;
+                return a; });
 
     m.def("build_octree", &build_octree,
           py::arg("positions"),
@@ -422,14 +526,27 @@ OctreeHandle — opaque handle; pass to find_candidates / characterise_shocks_oc
           py::arg("div_threshold")  = -0.1,
           py::arg("grad_threshold") = 0.1,
           R"(
-Find shock candidate leaves.
+Find shock candidate leaves (raw/normalised mode).
 
 Criteria: div(v) < div_threshold  AND  |∇ρ|/ρ > grad_threshold
-Both thresholds are dimensionless.
+Both thresholds are dimensionless — suitable for unit-normalised fields.
+For physical threshold computation from vshock_min/rhomean/mach_min use
+the Python-level _find_candidates_full() in octree_shockfind_pipeline.
 
 Returns
 -------
 list[int] — node indices of candidate leaves in the tree.
+)");
+
+    m.def("compute_gradient_of", &compute_gradient_of,
+          py::arg("handle"),
+          py::arg("field_arr"),
+          R"(
+Compute the AMR gradient of an arbitrary per-leaf scalar field.
+
+field_arr : 1-D float64 array of length handle.num_leaves, in Hilbert order.
+Returns (gx, gy, gz) — gradient components in normalised [0,1]^3 coordinates,
+parallel to the handle's other derived arrays (div_v_arr, grad_rho_*).
 )");
 
     m.def("characterise_shocks_octree", &py_characterise_shocks_octree,

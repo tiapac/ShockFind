@@ -1,0 +1,1 @@
+/home/mattia/codes/codici/Shockind_ground/ShockFind/src/shockfindCore_octave/../shockfindCore_octave.cpython-310-x86_64-linux-gnu.so

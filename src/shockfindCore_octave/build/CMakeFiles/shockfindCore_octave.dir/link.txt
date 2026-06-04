@@ -1,0 +1,1 @@
+/usr/bin/c++ -fPIC -O3 -DNDEBUG -flto=auto -Wl,--dependency-file=CMakeFiles/shockfindCore_octave.dir/link.d -shared  -o shockfindCore_octave.cpython-310-x86_64-linux-gnu.so CMakeFiles/shockfindCore_octave.dir/bindings_octave.cpp.o  libshockcore_oct.a

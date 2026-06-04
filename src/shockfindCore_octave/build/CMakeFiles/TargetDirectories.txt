@@ -1,0 +1,8 @@
+/home/mattia/codes/codici/Shockind_ground/ShockFind/src/shockfindCore_octave/build/CMakeFiles/shockcore_oct.dir
+/home/mattia/codes/codici/Shockind_ground/ShockFind/src/shockfindCore_octave/build/CMakeFiles/shockfindCore_octave.dir
+/home/mattia/codes/codici/Shockind_ground/ShockFind/src/shockfindCore_octave/build/CMakeFiles/edit_cache.dir
+/home/mattia/codes/codici/Shockind_ground/ShockFind/src/shockfindCore_octave/build/CMakeFiles/rebuild_cache.dir
+/home/mattia/codes/codici/Shockind_ground/ShockFind/src/shockfindCore_octave/build/CMakeFiles/list_install_components.dir
+/home/mattia/codes/codici/Shockind_ground/ShockFind/src/shockfindCore_octave/build/CMakeFiles/install.dir
+/home/mattia/codes/codici/Shockind_ground/ShockFind/src/shockfindCore_octave/build/CMakeFiles/install/local.dir
+/home/mattia/codes/codici/Shockind_ground/ShockFind/src/shockfindCore_octave/build/CMakeFiles/install/strip.dir
