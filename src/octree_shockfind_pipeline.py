@@ -292,16 +292,19 @@ def _find_candidates_full(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_octree_pipeline(
-    info_path: str,
+    info_path: str | None = None,
     name: str = "octree_run",
     *,
     box=None,
     box_units: str = "code",
-    # ── Tree parameters ───────────────────────────────────────────────────────
+    # ── Tree parameters (ignored when octree_load_path is given) ─────────────
     max_depth: int = 14,
     min_depth: int = 3,
     max_members: int = 1,
     max_nodes: int = 100_000_000,
+    # ── Octree HDF5 persistence ───────────────────────────────────────────────
+    octree_save_path: str | None = None,
+    octree_load_path: str | None = None,
     # ── Candidate finding — physical mode ─────────────────────────────────────
     vshock_min: float | None = None,
     rhomean: float | None = None,
@@ -336,32 +339,52 @@ def run_octree_pipeline(
     when provided; otherwise raw dimensionless thresholds (div_threshold / grad_threshold)
     are used — kept for unit-normalised fields and future library normalisation.
 
+    octree_save_path : if given, the built octree is saved to this HDF5 file after build.
+    octree_load_path : if given, the octree is loaded from this HDF5 file and RAMSES
+                       loading / tree building are skipped entirely (info_path not needed).
+
     Returns
     -------
     handle : OctreeHandle  — built octree (reusable for further queries)
     sf     : shock_finder  — populated with results; call sf.save_results(),
                              sf.plot3D(), sf.histograms() etc. as in main_example.py
     """
+    if octree_load_path is None and info_path is None:
+        raise ValueError("Provide either info_path (RAMSES data) or octree_load_path (HDF5)")
+
     sco = _import_shockfind_octave()
     shock_finder = _import_shock_finder()
 
     if periodic is None:
         periodic = [False, False, False]
 
-    # 1. Load RAMSES data
-    positions, attrs = load_ramses_for_shockfind(info_path, box=box, box_units=box_units)
+    if octree_load_path is not None:
+        # Load pre-built octree — skip RAMSES loading and tree construction
+        print(f"Loading octree from {octree_load_path} …")
+        handle = sco.load_octree(octree_load_path)
+        print(f"  {handle.num_leaves:,} leaves  {handle.num_nodes:,} nodes  "
+              f"(dx = 1/{1 << handle.max_depth} = {handle.cell_size:.3e})")
+    else:
+        # 1. Load RAMSES data
+        positions, attrs = load_ramses_for_shockfind(info_path, box=box, box_units=box_units)
 
-    # 2. Build octree
-    print("Building octree …")
-    handle = sco.build_octree(
-        positions, attrs, SHOCKFIND_FIELDS,
-        max_depth=max_depth,
-        min_depth=min_depth,
-        max_members=max_members,
-        max_nodes=max_nodes,
-    )
-    print(f"  {handle.num_leaves:,} leaves  {handle.num_nodes:,} nodes  "
-          f"(dx = 1/{1 << handle.max_depth} = {handle.cell_size:.3e})")
+        # 2. Build octree
+        print("Building octree …")
+        handle = sco.build_octree(
+            positions, attrs, SHOCKFIND_FIELDS,
+            max_depth=max_depth,
+            min_depth=min_depth,
+            max_members=max_members,
+            max_nodes=max_nodes,
+        )
+        print(f"  {handle.num_leaves:,} leaves  {handle.num_nodes:,} nodes  "
+              f"(dx = 1/{1 << handle.max_depth} = {handle.cell_size:.3e})")
+
+        if octree_save_path is not None:
+            if os.path.isdir(octree_save_path):
+                octree_save_path = os.path.join(octree_save_path, f"{name}_octree.h5")
+            sco.save_octree(handle, octree_save_path)
+            print(f"  Octree saved to {octree_save_path}")
 
     # 3. Find shock candidates
     print("Finding candidates …")
@@ -420,8 +443,9 @@ def main():
     parser = argparse.ArgumentParser(
         description="ShockFind on a RAMSES output using Octave AMR octree (no uniform grid)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("data_path",
-        help="RAMSES output directory (e.g. output_00021/) or info_*.txt path")
+    parser.add_argument("data_path", nargs="?", default=None,
+        help="RAMSES output directory (e.g. output_00021/) or info_*.txt path. "
+             "Not required when --load-octree is given.")
     parser.add_argument("-out", "--output", default=None,
         help="Directory to save results (default: <data_path>/shockfind_results/)")
     parser.add_argument("-name", "--name", default=None,
@@ -490,6 +514,15 @@ def main():
     char.add_argument("--line-range",  type=int,   default=10)
     char.add_argument("--shock-ratio", type=float, default=1.1)
 
+    # ── Octree HDF5 persistence ───────────────────────────────────────────────
+    persist = parser.add_argument_group("octree persistence (HDF5)")
+    persist.add_argument("--save-octree", type=str, default=None, metavar="PATH",
+        help="Save the built octree to this HDF5 file (requires USE_HDF5 build). "
+             "Useful to skip the expensive RAMSES+build step on re-runs.")
+    persist.add_argument("--load-octree", type=str, default=None, metavar="PATH",
+        help="Load octree from this HDF5 file instead of building from RAMSES. "
+             "data_path is not required when this flag is given.")
+
     # ── Analysis control ──────────────────────────────────────────────────────
     ctrl = parser.add_argument_group("analysis control")
     ctrl.add_argument("--rescale", type=int, default=0,
@@ -502,8 +535,18 @@ def main():
 
     args = parser.parse_args()
 
+    # Validate: need either a RAMSES path or a pre-built octree
+    if not args.load and not args.load_octree and not args.data_path:
+        parser.error("data_path is required unless --load-octree or --load is given")
+
     # Resolve output dir and run name
-    data_path = os.path.abspath(args.data_path)
+    if args.data_path:
+        data_path = os.path.abspath(args.data_path)
+    elif args.load_octree:
+        data_path = os.path.dirname(os.path.abspath(args.load_octree))
+    else:
+        data_path = os.getcwd()
+
     if args.output:
         results_path = args.output
     else:
@@ -511,8 +554,10 @@ def main():
 
     if args.name:
         run_name = args.name
-    else:
+    elif args.data_path:
         run_name = "octree_" + os.path.basename(data_path.rstrip("/"))
+    else:
+        run_name = "octree_" + os.path.splitext(os.path.basename(args.load_octree))[0]
 
     os.makedirs(results_path, exist_ok=True)
 
@@ -525,8 +570,10 @@ def main():
         handle = None
     else:
         handle, sf = run_octree_pipeline(
-            data_path,
+            args.data_path,
             name=run_name,
+            octree_save_path=args.save_octree,
+            octree_load_path=args.load_octree,
             max_depth=args.max_depth,
             min_depth=args.min_depth,
             max_members=args.max_members,

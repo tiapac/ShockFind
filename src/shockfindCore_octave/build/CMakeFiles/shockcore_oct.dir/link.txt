@@ -1,2 +1,0 @@
-/usr/bin/ar qc libshockcore_oct.a CMakeFiles/shockcore_oct.dir/home/mattia/codes/codici/Shockind_ground/ShockFind/src/shockfindCore_cpp/core.cpp.o CMakeFiles/shockcore_oct.dir/home/mattia/codes/codici/Shockind_ground/ShockFind/src/shockfindCore_cpp/mpi_dispatch.cpp.o
-/usr/bin/ranlib libshockcore_oct.a

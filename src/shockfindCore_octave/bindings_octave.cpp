@@ -405,6 +405,89 @@ static py::tuple compute_gradient_of(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// save_octree / load_octree — HDF5 persistence for the built OctreeHandle.
+// save_octree writes all field data (AMR structure + per-leaf fields + adjacency).
+// load_octree reads it back and recomputes div_v / grad_rho so the handle is
+// immediately usable for candidate finding without a RAMSES re-load.
+// Both require the shockfindCore_octave .so to have been built with USE_HDF5.
+// ─────────────────────────────────────────────────────────────────────────────
+static void py_save_octree(std::shared_ptr<OctreeHandle> handle, const std::string& filename)
+{
+#ifdef USE_HDF5
+    if (!handle || !handle->tree)
+        throw std::runtime_error("Invalid octree handle");
+    std::vector<std::string> present;
+    for (const char* f : {"density","pressure","vx","vy","vz","bx","by","bz"}) {
+        auto it = handle->tree->leafFieldData.find(f);
+        if (it != handle->tree->leafFieldData.end() && !it->second.empty())
+            present.push_back(f);
+    }
+    handle->tree->exportAllHDF5(filename, present,
+                                 /*include_rank=*/true,
+                                 /*include_filling_curve=*/true,
+                                 /*include_morton=*/false);
+#else
+    (void)handle; (void)filename;
+    throw std::runtime_error("save_octree: HDF5 support not compiled in. Rebuild with USE_HDF5.");
+#endif
+}
+
+static std::shared_ptr<OctreeHandle> py_load_octree(const std::string& filename)
+{
+#ifdef USE_HDF5
+    auto handle = std::make_shared<OctreeHandle>();
+    handle->tree = std::make_unique<MainTree<3>>(MainTree<3>::loadAllHDF5(filename));
+    MainTree<3>& tree = *handle->tree;
+
+    auto res = [&](std::initializer_list<const char*> names) -> const double* {
+        for (const char* n : names) {
+            auto it = tree.leafFieldData.find(n);
+            if (it != tree.leafFieldData.end() && !it->second.empty())
+                return it->second.data();
+        }
+        return nullptr;
+    };
+    handle->rho  = res({"density","rho","Density"});
+    handle->pres = res({"pressure","pres","Pressure","p"});
+    handle->vx   = res({"vx","velocity_x","Vx"});
+    handle->vy   = res({"vy","velocity_y","Vy"});
+    handle->vz   = res({"vz","velocity_z","Vz"});
+    handle->bx   = res({"bx","Bx","magnetic_x","Bfield_x"});
+    handle->by   = res({"by","By","magnetic_y","Bfield_y"});
+    handle->bz   = res({"bz","Bz","magnetic_z","Bfield_z"});
+
+    // Find the registered name for a given pointer into leafFieldData
+    auto find_name = [&](const double* ptr) -> std::string {
+        for (const auto& kv : tree.leafFieldData)
+            if (!kv.second.empty() && kv.second.data() == ptr) return kv.first;
+        return "";
+    };
+
+    // div(v) and ∇ρ are derived — recompute after load
+    if (handle->vx && handle->vy && handle->vz) {
+        std::string nvx = find_name(handle->vx);
+        std::string nvy = find_name(handle->vy);
+        std::string nvz = find_name(handle->vz);
+        if (!nvx.empty() && !nvy.empty() && !nvz.empty())
+            handle->div_v = computeLeafDivergence(tree, nvx, nvy, nvz);
+    }
+    if (handle->rho) {
+        std::string nrho = find_name(handle->rho);
+        if (!nrho.empty()) {
+            auto [gx, gy, gz] = computeLeafGradientComponents(tree, nrho);
+            handle->grad_x = std::move(gx);
+            handle->grad_y = std::move(gy);
+            handle->grad_z = std::move(gz);
+        }
+    }
+    return handle;
+#else
+    (void)filename;
+    throw std::runtime_error("load_octree: HDF5 support not compiled in. Rebuild with USE_HDF5.");
+#endif
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Module definition
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -547,6 +630,36 @@ Compute the AMR gradient of an arbitrary per-leaf scalar field.
 field_arr : 1-D float64 array of length handle.num_leaves, in Hilbert order.
 Returns (gx, gy, gz) — gradient components in normalised [0,1]^3 coordinates,
 parallel to the handle's other derived arrays (div_v_arr, grad_rho_*).
+)");
+
+    m.def("save_octree", &py_save_octree,
+          py::arg("handle"),
+          py::arg("filename"),
+          R"(
+Save the built octree to an HDF5 file.
+
+Persists: AMR node structure, per-leaf field data (density, pressure, vx/vy/vz, bx/by/bz),
+leaf ordering, and face-neighbour adjacency.  div_v and grad_rho are NOT saved (they
+are recomputed cheaply on load_octree()).  Requires USE_HDF5 at build time.
+
+Parameters
+----------
+handle   : OctreeHandle from build_octree()
+filename : output HDF5 path  (e.g. "run/octree.h5")
+)");
+
+    m.def("load_octree", &py_load_octree,
+          py::arg("filename"),
+          R"(
+Load an octree from an HDF5 file previously written by save_octree().
+
+Recomputes div_v and grad_rho after loading so the returned handle is ready for
+_find_candidates_full() / characterise_shocks_octree() without any RAMSES re-load.
+Requires USE_HDF5 at build time.
+
+Returns
+-------
+OctreeHandle — identical to what build_octree() would have returned.
 )");
 
     m.def("characterise_shocks_octree", &py_characterise_shocks_octree,

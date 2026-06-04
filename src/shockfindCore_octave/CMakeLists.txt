@@ -42,6 +42,29 @@ target_include_directories(shockcore_oct PUBLIC
 set_target_properties(shockcore_oct PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_options(shockcore_oct PRIVATE -O3 -Wall -Wextra -Wno-trigraphs)
 
+# ── HDF5 (optional; mirrors Octave Makefile: USE_HDF5) ───────────────────────
+# Enabled by default when the system HDF5 C++ library is found.
+# Disable explicitly with: cmake -B build -DUSE_HDF5=OFF
+option(USE_HDF5 "Enable HDF5 persistence (save_octree / load_octree)" ON)
+
+if(USE_HDF5)
+    find_library(HDF5_CPP_LIB  hdf5_cpp  PATHS /usr/lib/x86_64-linux-gnu/hdf5/serial)
+    find_library(HDF5_LIB      hdf5      PATHS /usr/lib/x86_64-linux-gnu/hdf5/serial)
+    find_library(HDF5_HL_LIB   hdf5_hl   PATHS /usr/lib/x86_64-linux-gnu/hdf5/serial)
+    find_path(HDF5_INCLUDE_DIR H5Cpp.h   PATHS /usr/include/hdf5/serial)
+
+    if(HDF5_CPP_LIB AND HDF5_LIB AND HDF5_INCLUDE_DIR)
+        message(STATUS "HDF5 found — save_octree/load_octree enabled")
+        set(HDF5_FOUND_LOCAL TRUE)
+    else()
+        message(WARNING "HDF5 libraries not found; save_octree/load_octree will throw at runtime")
+        set(HDF5_FOUND_LOCAL FALSE)
+    endif()
+else()
+    message(STATUS "HDF5 disabled (USE_HDF5=OFF)")
+    set(HDF5_FOUND_LOCAL FALSE)
+endif()
+
 # ── Python extension ──────────────────────────────────────────────────────────
 pybind11_add_module(shockfindCore_octave bindings_octave.cpp)
 
@@ -52,6 +75,16 @@ target_include_directories(shockfindCore_octave PRIVATE
 )
 target_link_libraries(shockfindCore_octave PRIVATE shockcore_oct)
 target_compile_options(shockfindCore_octave PRIVATE -O3)
+
+if(HDF5_FOUND_LOCAL)
+    target_compile_definitions(shockfindCore_octave PRIVATE USE_HDF5)
+    target_include_directories(shockfindCore_octave PRIVATE ${HDF5_INCLUDE_DIR})
+    target_link_libraries(shockfindCore_octave PRIVATE ${HDF5_CPP_LIB} ${HDF5_HL_LIB} ${HDF5_LIB})
+    # shockcore_oct also pulls in tree_io.hpp (via tree.hpp) when USE_HDF5 is set
+    target_compile_definitions(shockcore_oct PRIVATE USE_HDF5)
+    target_include_directories(shockcore_oct PRIVATE ${HDF5_INCLUDE_DIR})
+    target_link_libraries(shockcore_oct PRIVATE ${HDF5_CPP_LIB} ${HDF5_HL_LIB} ${HDF5_LIB})
+endif()
 
 # Install next to the other .so modules for easy import
 install(TARGETS shockfindCore_octave
