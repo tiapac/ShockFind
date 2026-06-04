@@ -14,6 +14,9 @@
 #include <memory>
 #include <string>
 #include <vector>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 namespace py = pybind11;
 
@@ -336,41 +339,53 @@ static py::tuple py_characterise_shocks_octree(
 
     ShockParams params = dict_to_params(extra);
 
-    // Build CellIndex for each candidate from the node index
-    std::vector<ShockResult> results;
-    results.reserve(candidate_node_indices.size());
-    int n = static_cast<int>(candidate_node_indices.size());
-
+    const int n         = static_cast<int>(candidate_node_indices.size());
     const int max_depth = tree.maxDepth;
 
+    // Pre-allocate so parallel writes land in separate slots (no push_back race).
+    std::vector<ShockResult> results(static_cast<size_t>(n));
+
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic, 64)
+#endif
     for (int ci = 0; ci < n; ++ci) {
         int nidx = candidate_node_indices[static_cast<size_t>(ci)];
+        ShockResult r{};
         if (nidx < 0 || nidx >= static_cast<int>(tree.nodes.size()) || !tree.nodes[nidx].isLeaf) {
-            ShockResult bad; bad.flag = 4; bad.loc_x = nidx;
-            results.push_back(bad);
-            continue;
-        }
-        CellIndex candidate = acc.make_from_node(nidx);
-        ShockResult r = characterise_shock(candidate, fields, params);
-
-        // Overwrite position with finest-level integer grid coords so shock_finder's
-        // shocks_data() / plot3D() work: loc * (1/2^max_depth) → physical position.
-        {
+            r.flag = 4; r.loc_x = nidx;
+        } else {
+            CellIndex candidate = acc.make_from_node(nidx);
+            r = characterise_shock(candidate, fields, params);
+            // Overwrite position with finest-level integer grid coords so shock_finder's
+            // shocks_data() / plot3D() work: loc * (1/2^max_depth) → physical position.
             const auto& nd = tree.nodes[static_cast<size_t>(nidx)];
             const int shift = max_depth - nd.level;
             r.loc_x = nd.coord.x << shift;
             r.loc_y = nd.coord.y << shift;
             r.loc_z = nd.coord.z << shift;
         }
-        results.push_back(r);
+        results[static_cast<size_t>(ci)] = r;
+
+#ifndef _OPENMP
+        // Serial-only progress (ordering is meaningful; skip when multithreaded).
         if (!quiet) {
-            int print_every = std::max(1, n / 20);
+            const int print_every = std::max(1, n / 20);
             if (ci % print_every == 0 || ci == n - 1) {
                 std::printf("  [octave] %d/%d  (%.0f%%)\n", ci+1, n, 100.0*(ci+1)/n);
                 std::fflush(stdout);
             }
         }
+#endif
     }
+
+#ifdef _OPENMP
+    if (!quiet) {
+        std::printf("  [octave] %d/%d  (100%%) [%d OpenMP threads]\n",
+                    n, n, omp_get_max_threads());
+        std::fflush(stdout);
+    }
+#endif
+
     return results_to_python(results);
 }
 

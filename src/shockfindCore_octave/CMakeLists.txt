@@ -42,6 +42,14 @@ target_include_directories(shockcore_oct PUBLIC
 set_target_properties(shockcore_oct PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_options(shockcore_oct PRIVATE -O3 -Wall -Wextra -Wno-trigraphs)
 
+# ── OpenMP (optional; parallelises the characterisation candidate loop) ───────
+find_package(OpenMP)
+if(OpenMP_CXX_FOUND)
+    message(STATUS "OpenMP found — characterise_shocks_octree will use ${OpenMP_CXX_VERSION} threads")
+else()
+    message(STATUS "OpenMP not found — characterisation runs single-threaded")
+endif()
+
 # ── HDF5 (optional; mirrors Octave Makefile: USE_HDF5) ───────────────────────
 # Enabled by default when the system HDF5 C++ library is found.
 # Disable explicitly with: cmake -B build -DUSE_HDF5=OFF
@@ -75,6 +83,10 @@ target_include_directories(shockfindCore_octave PRIVATE
 )
 target_link_libraries(shockfindCore_octave PRIVATE shockcore_oct)
 target_compile_options(shockfindCore_octave PRIVATE -O3)
+
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(shockfindCore_octave PRIVATE OpenMP::OpenMP_CXX)
+endif()
 
 if(HDF5_FOUND_LOCAL)
     target_compile_definitions(shockfindCore_octave PRIVATE USE_HDF5)
