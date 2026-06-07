@@ -93,6 +93,13 @@ _RAMSES_FIELD_MAP = {
     "bz":       [("gas","magnetic_field_z")],
 }
 
+# Optional fields: silently skipped if not present in the RAMSES dataset.
+_RAMSES_OPTIONAL_FIELDS = {
+    "hydro_scalar_00": [
+        ("ramses",    "hydro_scalar_00"),
+    ],
+}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Data loading
@@ -166,9 +173,25 @@ def load_ramses_for_shockfind(
             raise RuntimeError(f"Field '{name}' not found in RAMSES dataset. Available fields: {ds.derived_field_list}")
         cols.append(val)
 
+    # Optional fields — silently skipped if not present
+    optional_loaded = []
+    for opt_name, yt_keys in _RAMSES_OPTIONAL_FIELDS.items():
+        for yt_key in yt_keys:
+            if yt_key in ds.derived_field_list:
+                arr = np.asarray(ad[yt_key], dtype=float)
+                if mask is not None:
+                    arr = arr[mask]
+                cols.append(arr)
+                optional_loaded.append(opt_name)
+                break
+            else:
+                print(f"Optional field '{opt_name}' (yt key {yt_key}) not found; skipping.")
+
+    all_field_names = SHOCKFIND_FIELDS + optional_loaded
     attrs = np.column_stack(cols)
-    print(f"Loaded {positions.shape[0]:,} RAMSES cells  ({len(SHOCKFIND_FIELDS)} MHD fields)")
-    return positions.astype(np.float64, copy=False), attrs.astype(np.float64, copy=False)
+    extra = f" + {optional_loaded}" if optional_loaded else ""
+    print(f"Loaded {positions.shape[0]:,} RAMSES cells  ({len(SHOCKFIND_FIELDS)} MHD fields{extra})")
+    return positions.astype(np.float64, copy=False), attrs.astype(np.float64, copy=False), all_field_names
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -366,12 +389,12 @@ def run_octree_pipeline(
               f"(dx = 1/{1 << handle.max_depth} = {handle.cell_size:.3e})")
     else:
         # 1. Load RAMSES data
-        positions, attrs = load_ramses_for_shockfind(info_path, box=box, box_units=box_units)
+        positions, attrs, field_names = load_ramses_for_shockfind(info_path, box=box, box_units=box_units)
 
         # 2. Build octree
         print("Building octree …")
         handle = sco.build_octree(
-            positions, attrs, SHOCKFIND_FIELDS,
+            positions, attrs, field_names,
             max_depth=max_depth,
             min_depth=min_depth,
             max_members=max_members,

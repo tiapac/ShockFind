@@ -432,10 +432,9 @@ static void py_save_octree(std::shared_ptr<OctreeHandle> handle, const std::stri
     if (!handle || !handle->tree)
         throw std::runtime_error("Invalid octree handle");
     std::vector<std::string> present;
-    for (const char* f : {"density","pressure","vx","vy","vz","bx","by","bz"}) {
-        auto it = handle->tree->leafFieldData.find(f);
-        if (it != handle->tree->leafFieldData.end() && !it->second.empty())
-            present.push_back(f);
+    for (const auto& kv : handle->tree->leafFieldData) {
+        if (!kv.second.empty())
+            present.push_back(kv.first);
     }
     handle->tree->exportAllHDF5(filename, present,
                                  /*include_rank=*/true,
