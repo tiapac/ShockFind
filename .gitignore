@@ -5,10 +5,39 @@ data/
 stuff/
 pickled/
 
+# Machine-local build configuration (copy build.local.example to create)
+build.local
 
-
-
+# C++ build artifacts
+src/shockfindCore_cpp/build/
+src/*.so
+src/*.pyd
+*.so
 
 *.pk
 *.png
 *.PNG
+*.jpg
+*.jpeg
+*.bmp
+*.gif
+*.pdf
+*.zip
+*.tar.gz
+*.tar.bz2
+*.log
+*.out
+*.tmp
+*.bak
+*.swp
+*.swo
+*.DS_Store
+*.egg-info/
+*.hdf5
+*.h5
+*.npy
+*.npz
+*.ipynb_checkpoints/
+**/__pycache__/
+**/pickled/
+**/build/

@@ -137,9 +137,9 @@ class shock_finder(core):
             if dx is None: 
                 raise Exception("If density gradient is not supplied, \
                 you must input a dx to compute the divergence runtime.")
-            nablaRho  = np.gradient(Rho, dx,edge_order=2)
-                
-        self.nablaRho    = nablaRho
+            nablaRho  = list(np.gradient(Rho, dx,edge_order=2))
+
+        self.nablaRho    = list(nablaRho)
         
         return  
      
@@ -394,13 +394,20 @@ class shock_finder(core):
                     _divV     = self.divV
                     _nablaRho = self.nablaRho
 
-                data, header = _cpp.characterise_shocks(
-                    self.shock_candidates,
-                    _Rho, _P, _B, _V, _divV, _nablaRho,
-                    self.extra,
-                    use_mpi=_use_mpi,
-                    quiet=quiet,
-                )
+                import sys as _sys, faulthandler as _fh
+                _fh.enable(file=_sys.stderr)
+                try:
+                    data, header = _cpp.characterise_shocks(
+                        self.shock_candidates,
+                        _Rho, _P, _B, _V, _divV, _nablaRho,
+                        self.extra,
+                        use_mpi=_use_mpi,
+                        quiet=quiet,
+                    )
+                except Exception as _e:
+                    print(f"\n[ShockFind C++ crash] rank={_rank}/{_size} "
+                          f"{type(_e).__name__}: {str(_e)[:300]}", file=_sys.stderr, flush=True)
+                    raise
 
                 # Worker ranks: work is done, exit so rank 0 continues alone.
                 if _use_mpi and _rank != 0:
@@ -420,6 +427,14 @@ class shock_finder(core):
                 _log.warning("C++ backend not built — falling back to Python multiprocessing")
 
         # ── Python multiprocessing fallback ───────────────────────────────────────
+        # Guard fires here too: use_cpp=True but C++ import failed (ImportError path).
+        # Worker ranks never called load_data so self.Rho doesn't exist.
+        if _use_mpi:
+            raise RuntimeError(
+                f"C++ extension not found but MPI is active ({_size} ranks). "
+                f"Worker ranks have no data — Python multiprocessing cannot run under mpirun. "
+                f"Build the C++ extension (see CLAUDE.md) and re-run."
+            )
         _warnings.warn(
             "The Python multiprocessing backend (use_cpp=False / C++ extension not found) "
             "is deprecated and will be removed in a future release. "
@@ -479,23 +494,27 @@ class shock_finder(core):
         return self.computed_shocks, self.header
     
     def save_results(self, path=None, name=None):
-        if name is None: name = self.name 
-        if path is not None: path = "./"
-        print("Saving results to",name )
-        with open("%s/%s_result.pk"%(path,name), 'wb') as handle:
-                  pickle.dump([self.shocks,self.header], handle)
+        import os as _os
+        if name is None: name = self.name
+        if path is None: path = "./"
+        _os.makedirs(path, exist_ok=True)
+        # _log.info(f"Saving results to: {path}/{name}_result.pk")
+        with open(_os.path.join(path, name + "_result.pk"), 'wb') as handle:
+            pickle.dump([self.shocks, self.header], handle)
+        _log.info(f"Results saved to file: {path}/{name}_result.pk")
+        
         return
     @property
     def results(self):
-        return   self.shocks,self.header
-    def load_results(self,path=None, name=None):
-        if name is None: name = self.name 
-        if path is not None: path = "./"
-
-        with open("%s/%s_result.pk"%(path,name), 'rb') as handle:
-            self.shocks,self.header = pickle.load( handle)
+        return self.shocks, self.header
+    def load_results(self, path=None, name=None):
+        import os as _os
+        if name is None: name = self.name
+        if path is None: path = "./"
+        with open(_os.path.join(path, name + "_result.pk"), 'rb') as handle:
+            self.shocks, self.header = pickle.load(handle)
         self.shocks_data()
-        return self.shocks,self.header
+        return self.shocks, self.header
     
     def plot_candidates(self, ax = None, fig = None, alpha = 0.5, ss = 2):
         if fig == None: fig=plt.figure(figsize=(8,8))

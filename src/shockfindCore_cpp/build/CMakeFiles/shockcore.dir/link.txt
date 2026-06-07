@@ -1,2 +1,0 @@
-/usr/bin/ar qc libshockcore.a CMakeFiles/shockcore.dir/core.cpp.o CMakeFiles/shockcore.dir/mpi_dispatch.cpp.o
-/usr/bin/ranlib libshockcore.a

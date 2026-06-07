@@ -1,0 +1,20 @@
+# Copy this file to build.local and edit to match your machine.
+# build.local is gitignored — it will never be committed.
+#
+# Only set what differs from the defaults. Leave everything else commented out.
+
+# Path to the OpenMPI installation that mpi4py was linked against.
+# Required when using --mpi and the auto-detected mpicxx is wrong.
+# MPI_HOME=/opt/openmpi
+
+# Full path to the mpirun executable (defaults to $MPI_HOME/bin/mpirun).
+# MPIRUN=/opt/openmpi/bin/mpirun
+
+# CMake build type: Release (default), Debug, RelWithDebInfo.
+# BUILD_TYPE=Release
+
+# Number of parallel compile jobs (defaults to all CPUs via nproc).
+# NPROC=8
+# Full path to the Python interpreter that has pybind11 installed.
+# Required when modules (e.g. R-bundle-CRAN) shadow the conda Python on PATH.
+# PYTHON=~/miniconda3/envs/pyxsim2/bin/python

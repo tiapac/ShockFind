@@ -2,11 +2,32 @@ import pickle
 import gc
 import AnalysisPlayground.analysis_tools as an
 # import  shock_finder as css
+# try:
 from ShockFind import shock_finder
+from ShockFind.utils.logger import setup_logger, loglevels
+# except ImportError:
+#     from src.shockfind_interface import shock_finder
+#     from utils.logger import setup_logger, loglevels
+    
 import numpy as np
 import matplotlib.pyplot as plt
 import os
-from ShockFind.utils.logger import setup_logger, loglevels
+import argparse
+
+
+parser = argparse.ArgumentParser(description='Run shock finding analysis on a simulation snapshot.')
+parser.add_argument("-lvl",'--level', type=int, default=None, help='AMR level to analyze (default: see file)')
+parser.add_argument("-dlvl",'--dims-level', type=int, default=None, help='AMR level to analyze (default: see file)')
+parser.add_argument("-out",'--outnumb', type=int, default=None, help='Snapshot number to analyze (default: see file)')
+parser.add_argument("-load",'--load', action='store_true', help='Load results from file instead of running analysis')
+parser.add_argument("-rescale",'--rescale', type=float, default=0, help='Rescale factor for shock speeds (default: 0, no rescaling)')
+parser.add_argument("-plot",'--plot', action='store_true', help='Show plots after analysis')
+parser.add_argument("-quiet",'--quiet', action='store_true', help='Run analysis without printing progress messages')
+parser.add_argument("-python",'--python', action='store_true', help='Use Python implementation for candidate analysis (slower but more flexible)')
+parser.add_argument("-dp",'--data-path', type=str, default="/mnt/beegfs/projects/hpcc250512a2/mpacicco/simulations/BarrosBugFix/outputs_blowoutOK_double/", help='Path to simulation data (default: see file)')
+parser.add_argument("-owc",'--overwrite-cache', action='store_true', help='Overwrite cached data and load from scratch')
+args = parser.parse_args()
+
 
 def _mpi_rank():
     try:
@@ -21,15 +42,34 @@ setup_logger("ShockFind",            level=loglevels.INFO)   # show ShockFind li
 
 
 
-level= 9
-analysis_name = "SNR_HB"
-analysis_name += "lvl_%02d"%level
-outnumb = 25
+level= args.level if args.level is not None else 8
+outnumb = args.outnumb if args.outnumb is not None else 21
+cube_dims = 2**(args.dims_level if args.dims_level is not None else 8)
 
-directory = "data/%s_%05d"%(analysis_name,outnumb) + "/"
+analysis_name = "LB_double"
+analysis_name += "lvl_%02d_dims_%03d_%05d"%(level, cube_dims, outnumb)
 
-rescale=0
-load = False
+
+SNAPSHOT_PREFIX = f"output_{outnumb:05d}"
+
+
+
+# DATA_PATH = "/mnt/beegfs/projects/hpcc250512a2/mpacicco/simulations/BarrosBugFix/outputs_BlowoutHighRes11_only/"
+DATA_PATH = args.data_path if args.data_path is not None else "/mnt/beegfs/projects/hpcc250512a2/mpacicco/simulations/BarrosBugFix/outputs_blowoutOK_double/"
+
+snap_path  = DATA_PATH + SNAPSHOT_PREFIX
+
+RESULTS_PATH = DATA_PATH + "shockfind_results/"
+rescale=args.rescale
+
+# # if snapshot is a DIRECTORY (RAMSES) THEN WE PUT IT INTO THE SNAPSHOT ITSELF.
+# if os.path.isdir(snap_path):
+#     CACHE_PATH = snap_path + "/__shockfind_cache/"
+# else:
+# else, we create a cache directory in the same folder as the snapshot file (ENZO, FLASH, etc.)
+CACHE_PATH = DATA_PATH + "__shockfind_cache/"
+
+load = args.load
 
 if __name__=="__main__":
     names=[
@@ -47,35 +87,46 @@ if __name__=="__main__":
     ### collecting data from simulations
     def loadytData():  
         def fromScratch():
-            try:
-                os.makedirs(directory)
-            except Exception as e: 
-                logger.debug(str(e))
-                pass
+            os.makedirs(CACHE_PATH, exist_ok=True)
             if _rank == 0:
                 logger.info("no cache found — loading simulation data from scratch")
             else: 
                 logger.error("no cache found, but this is a worker rank — this should not happen, check your setup")
                 raise RuntimeError("abort.")
-
-            #ds = an.analyse(outpath="/home/mattia/codes/CR/cr_particles_multip_MESS", outnumb=285)
-            ds = an.analyse(outpath="/home/mattia/codes/codici/Shockind_ground/data/", outnumb=outnumb)
-
-            dx   = (ds.width/2**level)[0].in_cgs().d
-            dens, cube = ds.get_cube(level=level, field="density", ghost=1)
-            if level > 8:
-                directory2 = directory+"many_lvl_%i/"%level
-                try:
-                    os.makedirs(directory2)
-                except Exception as e: 
-                    print(e)
-                    pass 
+            
+            ds = an.analyse(outpath=DATA_PATH, outnumb=outnumb)
+            center_pc = 800.0
+            length_pc = 400.0
+            dx = ds.ds.quan(length_pc / cube_dims, "pc").in_cgs().d
+            center_code = ds.ds.quan(center_pc, "pc").in_units("code_length").d
+            length_code = ds.ds.quan(length_pc, "pc").in_units("code_length").d
+            
+            
+            if level <= 8:
+                dens, cube = ds.get_cube(level=level, 
+                                        field="density",
+                                        ghost=1,
+                                        center=center_code, 
+                                        length=length_code,
+                                        dims=cube_dims)
+            
+            
+            elif level > 8:
+                directory2 = f"{CACHE_PATH}/cached_heavy_lvl_{level}_output_{outnumb:05d}/"
+                
+                os.makedirs(directory2, exist_ok=True)
+                 
                 for name in names:
-                    with open(directory2+"%s.pickle"%name, 'wb') as handle:
+                    with open(directory2+"%s.pkl"%name, 'wb') as handle:
                         if name=="dx":
                             c=pickle.dump(dx, handle)      
                         else:
-                            data,cube=ds.get_cube(level=9, field=name, ghost=1)
+                            data,cube=ds.get_cube(level=level,
+                                                field=name,
+                                                ghost=1,
+                                                center=center_code, 
+                                                length=length_code,
+                                                dims=cube_dims)
                             c=pickle.dump(data.in_cgs().d, handle)
                             del data,cube,c
                             gc.collect()                       
@@ -90,28 +141,30 @@ if __name__=="__main__":
                 rho =  cube["gas",  "density"].in_cgs().d
                 datas = [vx,vy,vz,Bx,By,Bz,P,rho,dx]
                 #os.mkdir("pickled_data_from_SNR")
-                with open(directory+"total_%i.pickle"%level, 'wb') as handle:
+                with open(CACHE_PATH+f"/cached_lvl_{level}_dims_{cube_dims}_output_{outnumb:05d}.pkl", 'wb') as handle:
                     pickle.dump(datas, handle)
                 return datas
         try:
+            if args.overwrite_cache:
+                raise RuntimeError("overwrite cache flag set, loading from scratch")
             if level > 8:
                 a=[]        
                 for name in names:
-                    directory2 = directory+"many_lvl_%i"%level
-                    with open(directory2+"%s.pickle"%name, 'rb') as handle:
+                    directory2 = CACHE_PATH+f"/cached_heavy_lvl_{level}_output_{outnumb:05d}/"
+                    with open(directory2+"%s.pkl"%name, 'rb') as handle:
                             a.append(pickle.load( handle))
             else:
-                with open(directory+"total_%i.pickle"%level, 'rb') as handle:
+                with open(CACHE_PATH+f"/cached_lvl_{level}_dims_{cube_dims}_output_{outnumb:05d}.pkl", 'rb') as handle:
                     a=pickle.load( handle)
             
-            vx, vy, vz, Bx, By, Bz, P, rho, dx = a
-            del a
+            # vx, vy, vz, Bx, By, Bz, P, rho, dx = a
+            # del a
             if _rank == 0:
                 logger.info("data loaded from cache")
             else: 
                 logger.error("no cache found, but this is a worker rank — this should not happen, check your setup")
                 raise RuntimeError("abort.")
-            return [vx, vy, vz, Bx, By, Bz, P, rho, dx]
+            return a #[vx, vy, vz, Bx, By, Bz, P, rho, dx]
         except Exception as e:
             return fromScratch()    
         
@@ -121,7 +174,7 @@ if __name__=="__main__":
     shocksfinder=shock_finder(name=analysis_name)
     
     if load:
-        shocksfinder.load_results(path=directory, name=analysis_name)
+        shocksfinder.load_results(path=RESULTS_PATH, name=analysis_name)
   
         
     else:
@@ -136,8 +189,8 @@ if __name__=="__main__":
                             dx = dx     # spatial resolution - only for uniform grid
                             )
             shocksfinder.set_thresholds(dx         = dx,
-                                vshock_min = 5e5,
-                                rhomean    = 3.e-24
+                                vshock_min = 1e6,
+                                rhomean    = 3.e-26
                                 )
 
         # set code parameters (all ranks need self.extra for the C++ binding)
@@ -157,31 +210,33 @@ if __name__=="__main__":
         shocksfinder.shocks_data()
         
         # save the results to file for later inspection 
-        shocksfinder.save_results(path=directory, name=analysis_name)
+        shocksfinder.save_results(path=RESULTS_PATH, name=analysis_name)
+        
     #finally:
     # make a 3D plot with all the shocks found
     #shocksfinder.plot3D(types="sf", alpha=0.1, ss=1)
     # make histograms of the various shock quantities
    
     names = {i:name for i,name in enumerate(shocksfinder.header[1])}
-    #print(names)
     shared = dict(bins=15 , log=True , alpha=0.8, histtype="step", lw=2, density=True)
     ax, fig = shocksfinder.histograms(9, **shared )
     shocksfinder.histograms(10, ax = ax, fig=fig, linestyle="--", **shared )
-    #print("done")
     shocksfinder_results= shocksfinder.results#shocksfinder.load_results(path=directory, name=analysis_name)
 
     shocks = shocksfinder_results[0]#.shocks
-    cond   = np.logical_and(
-                            np.logical_and(
-                                            shocks[6] > 0,
-                                            shocks[15]==0
-                                          ),
-                            shocks[14]==1
-                           )
-    header=shocksfinder_results[1][1]
-    with open("%s_shocks+header_%d.pk"%(analysis_name,level), 'wb') as handle:
-                  pickle.dump([shocks,header], handle)
-    shocksfinder.plot3D(types = "fs")
-    plt.show()
+    # cond   = np.logical_and(
+    #                         np.logical_and(
+    #                                         shocks[6] > 0,
+    #                                         shocks[15]==0
+    #                                       ),
+    #                         shocks[14]==1
+    #                        )
+    # header=shocksfinder_results[1][1]
+    # with open(f"{RESULTS_PATH}/{analysis_name}_shocks+header_{level}.pkl", 'wb') as handle:
+    #               pickle.dump([shocks,header], handle)
+    ax, fig = shocksfinder.plot3D(types = "fs")
+    os.makedirs(RESULTS_PATH, exist_ok=True)
+    fig.savefig(f"{RESULTS_PATH}/{analysis_name}_3Dplot_{level}.png", dpi=300)
+    logger.info(f"3D plot saved to file: {RESULTS_PATH}/{analysis_name}_3Dplot_{level}.png")
+    # plt.show(a)
     quit()
