@@ -6,13 +6,22 @@ uniform covering grid.  Heavy computation (tree build, candidates, characterisat
 is fully in C++ via shockfindCore_octave.  Results are saved/loaded/plotted through
 the existing shock_finder machinery so all downstream analysis tools work unchanged.
 
+Data loading is delegated to src/interfaces/ — pass --interface to select the code.
+SPH / moving-mesh codes (Arepo) require a pre-built octree HDF5 via --load-octree;
+run src/build_octree.py first to produce it.
+
 Usage (standalone):
-    python src/octree_shockfind_pipeline.py /path/to/ramses/output_00021 \\
-        --output /path/to/results/ --name my_run
+    # RAMSES — build octree and run shockfind in one shot:
+    python src/octree_shockfind_pipeline.py output_00021/ \\
+        --interface ramses --output results/ --name run21
+
+    # Arepo — build octree first, then run shockfind:
+    python src/build_octree.py arepo snapshot_082.hdf5 --save-octree oct.h5
+    python src/octree_shockfind_pipeline.py --load-octree oct.h5
 
 Usage (library):
     from src.octree_shockfind_pipeline import run_octree_pipeline
-    handle, sf = run_octree_pipeline("/path/to/output_00021")
+    handle, sf = run_octree_pipeline("output_00021", interface="ramses")
     sf.save_results(path="results/", name="run01")
     sf.plot3D()
 """
@@ -58,54 +67,30 @@ def _import_shockfind_octave():
 
 
 def _import_shock_finder():
-    """Import shock_finder from the ShockFind package.
-
-    ShockFind uses relative imports internally (from ..utils.utils import utils),
-    so it must be imported as a proper package — not as a bare src.* module.
-    We ensure the parent of the ShockFind directory is on sys.path so Python
-    resolves it as 'ShockFind', then use the package's own __init__ re-export.
-    """
-    src_dir        = os.path.dirname(os.path.abspath(__file__))  # .../ShockFind/src
-    shockfind_root = os.path.dirname(src_dir)                    # .../ShockFind
-    pkg_root       = os.path.dirname(shockfind_root)             # .../Shockind_ground
-
+    """Import shock_finder from the ShockFind package."""
+    src_dir        = os.path.dirname(os.path.abspath(__file__))
+    shockfind_root = os.path.dirname(src_dir)
+    pkg_root       = os.path.dirname(shockfind_root)
     if pkg_root not in sys.path:
         sys.path.insert(0, pkg_root)
-
     from ShockFind import shock_finder as sf_cls
     return sf_cls
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Field layouts
+# Field layouts — imported from interfaces (re-exported for backward compat)
 # ─────────────────────────────────────────────────────────────────────────────
 
-SHOCKFIND_FIELDS_MHD   = ["density", "pressure", "vx", "vy", "vz", "bx", "by", "bz"]
-SHOCKFIND_FIELDS_HYDRO = ["density", "pressure", "vx", "vy", "vz"]
-SHOCKFIND_FIELDS = SHOCKFIND_FIELDS_MHD  # backward-compatible alias
-
-_RAMSES_FIELD_MAP = {
-    "density":  [("gas","density")],
-    "pressure": [("gas","pressure")],
-    "vx":       [("gas","velocity_x")],
-    "vy":       [("gas","velocity_y")],
-    "vz":       [("gas","velocity_z")],
-    # MHD-only fields — only loaded when hydro_only=False
-    "bx":       [("gas","magnetic_field_x")],
-    "by":       [("gas","magnetic_field_y")],
-    "bz":       [("gas","magnetic_field_z")],
-}
-
-# Optional fields: silently skipped if not present in the RAMSES dataset.
-_RAMSES_OPTIONAL_FIELDS = {
-    "hydro_scalar_00": [
-        ("ramses",    "hydro_scalar_00"),
-    ],
-}
+from src.interfaces import (   # noqa: E402
+    SHOCKFIND_FIELDS_MHD,
+    SHOCKFIND_FIELDS_HYDRO,
+    SHOCKFIND_FIELDS,
+    get_interface,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Data loading
+# Data loading — thin wrappers over src/interfaces/
 # ─────────────────────────────────────────────────────────────────────────────
 
 def load_ramses_for_shockfind(
@@ -114,97 +99,46 @@ def load_ramses_for_shockfind(
     box_units: str = "code",
     hydro_only: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Load RAMSES cells via yt.  Backward-compatible wrapper over RamsesInterface.
+
+    Returns (positions, attrs, field_names).
     """
-    Load RAMSES gas cell centres + field values via yt.
+    iface = get_interface(
+        "ramses", info_path,
+        box=box, box_units=box_units, hydro_only=hydro_only,
+    )
+    data = iface.load()
+    return data.positions, data.attrs, data.field_names
 
-    Parameters
-    ----------
-    hydro_only : if True, skip magnetic field loading (bx/by/bz).
-                 Use for pure-hydro (non-MHD) RAMSES runs.
 
-    Returns
-    -------
-    positions   : (N, 3) float64 — cell centres normalised to [0,1]^3
-    attrs       : (N, K) float64 — columns in field_names order
-    field_names : list[str] — names of the K columns
+def _load_for_pipeline(
+    interface: str,
+    data_path: str,
+    box=None,
+    box_units: str = "code",
+    hydro_only: bool = False,
+    **iface_kwargs,
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Load any interface and return (positions, attrs, field_names).
+
+    Raises clearly for HSML codes that cannot go straight to shockfindCore_octave.
     """
-    yt = _require("yt", "Install yt: pip install yt (or conda install -c conda-forge yt)")
-
-    if os.path.isfile(info_path):
-        info = info_path
-    else:
-        import glob
-        candidates = sorted(glob.glob(os.path.join(info_path, "info_*.txt")))
-        if not candidates:
-            raise FileNotFoundError(f"No info_*.txt under {info_path}")
-        info = candidates[-1]
-
-    ds = yt.load(info)
-    ad = ds.all_data()
-
-    le = ds.domain_left_edge.to("code_length").v
-    w  = ds.domain_width   .to("code_length").v
-
-    x = ad[("gas","x")].to("code_length").v
-    y = ad[("gas","y")].to("code_length").v
-    z = ad[("gas","z")].to("code_length").v
-
-    positions = np.column_stack([
-        np.clip((x - le[0]) / w[0], 0.0, 1.0),
-        np.clip((y - le[1]) / w[1], 0.0, 1.0),
-        np.clip((z - le[2]) / w[2], 0.0, 1.0),
-    ])
-
-    mask = None
-    if box is not None:
-        bx = np.array(box, dtype=float)
-        if box_units == "code":
-            bx[:2] = (bx[:2] - le[0]) / w[0]
-            bx[2:4] = (bx[2:4] - le[1]) / w[1]
-            bx[4:] = (bx[4:] - le[2]) / w[2]
-        mask = (
-            (positions[:, 0] >= bx[0]) & (positions[:, 0] <= bx[1]) &
-            (positions[:, 1] >= bx[2]) & (positions[:, 1] <= bx[3]) &
-            (positions[:, 2] >= bx[4]) & (positions[:, 2] <= bx[5])
+    iface = get_interface(
+        interface, data_path,
+        box=box, box_units=box_units, hydro_only=hydro_only,
+        **iface_kwargs,
+    )
+    if iface.uses_hsml:
+        raise ValueError(
+            f"Interface '{interface}' uses HSML deposition, which requires a "
+            "pre-built octree HDF5.\n"
+            "  Step 1: python src/build_octree.py {interface} {data_path} "
+            "--save-octree my_oct.h5\n"
+            "  Step 2: python src/octree_shockfind_pipeline.py "
+            "--load-octree my_oct.h5"
         )
-        positions = positions[mask]
-
-    base_fields = SHOCKFIND_FIELDS_HYDRO if hydro_only else SHOCKFIND_FIELDS_MHD
-
-    cols = []
-    for name in base_fields:
-        val = None
-        for yt_key in _RAMSES_FIELD_MAP[name]:
-            if yt_key in ds.derived_field_list:
-                arr = np.asarray(ad[yt_key], dtype=float)
-                if mask is not None:
-                    arr = arr[mask]
-                val = arr
-                break
-        if val is None:
-            raise RuntimeError(f"Field '{name}' not found in RAMSES dataset. Available fields: {ds.derived_field_list}")
-        cols.append(val)
-
-    # Optional fields — silently skipped if not present
-    optional_loaded = []
-    for opt_name, yt_keys in _RAMSES_OPTIONAL_FIELDS.items():
-        for yt_key in yt_keys:
-            if yt_key in ds.derived_field_list:
-                arr = np.asarray(ad[yt_key], dtype=float)
-                if mask is not None:
-                    arr = arr[mask]
-                cols.append(arr)
-                optional_loaded.append(opt_name)
-                break
-            else:
-                print(f"Optional field '{opt_name}' (yt key {yt_key}) not found; skipping.")
-
-    all_field_names = base_fields + optional_loaded
-    attrs = np.column_stack(cols)
-    mode_label = "hydro" if hydro_only else "MHD"
-    extra = f" + {optional_loaded}" if optional_loaded else ""
-    print(f"Loaded {positions.shape[0]:,} RAMSES cells  ({len(base_fields)} {mode_label} fields{extra})")
-    return positions.astype(np.float64, copy=False), attrs.astype(np.float64, copy=False), all_field_names
+    data = iface.load()
+    return data.positions, data.attrs, data.field_names
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -338,6 +272,7 @@ def run_octree_pipeline(
     info_path: str | None = None,
     name: str = "octree_run",
     *,
+    interface: str = "ramses",
     box=None,
     box_units: str = "code",
     # ── Tree parameters (ignored when octree_load_path is given) ─────────────
@@ -378,14 +313,18 @@ def run_octree_pipeline(
     quiet: bool = False,
 ):
     """
-    End-to-end pipeline: RAMSES → octree → candidates → shock results.
+    End-to-end pipeline: dataset → octree → candidates → shock results.
+
+    ``interface`` selects the data loader ('ramses', 'arepo', …).
+    HSML-based codes (Arepo) require a pre-built octree via ``octree_load_path``;
+    run ``src/build_octree.py`` first to produce it.
 
     Mirrors main_example.py: physical thresholds (vshock_min / rhomean) are used
     when provided; otherwise raw dimensionless thresholds (div_threshold / grad_threshold)
     are used — kept for unit-normalised fields and future library normalisation.
 
     octree_save_path : if given, the built octree is saved to this HDF5 file after build.
-    octree_load_path : if given, the octree is loaded from this HDF5 file and RAMSES
+    octree_load_path : if given, the octree is loaded from this HDF5 file and data
                        loading / tree building are skipped entirely (info_path not needed).
 
     Returns
@@ -395,7 +334,7 @@ def run_octree_pipeline(
                              sf.plot3D(), sf.histograms() etc. as in main_example.py
     """
     if octree_load_path is None and info_path is None:
-        raise ValueError("Provide either info_path (RAMSES data) or octree_load_path (HDF5)")
+        raise ValueError("Provide either info_path (data path) or octree_load_path (HDF5)")
 
     sco = _import_shockfind_octave()
     shock_finder = _import_shock_finder()
@@ -410,9 +349,11 @@ def run_octree_pipeline(
         print(f"  {handle.num_leaves:,} leaves  {handle.num_nodes:,} nodes  "
               f"(dx = 1/{1 << handle.max_depth} = {handle.cell_size:.3e})")
     else:
-        # 1. Load RAMSES data
-        positions, attrs, field_names = load_ramses_for_shockfind(
-            info_path, box=box, box_units=box_units, hydro_only=hydro_only)
+        # 1. Load data via the selected interface
+        positions, attrs, field_names = _load_for_pipeline(
+            interface, info_path,
+            box=box, box_units=box_units, hydro_only=hydro_only,
+        )
 
         # 2. Build octree
         print("Building octree …")
@@ -489,11 +430,14 @@ def run_octree_pipeline(
 def main():
     import argparse
     parser = argparse.ArgumentParser(
-        description="ShockFind on a RAMSES output using Octave AMR octree (no uniform grid)",
+        description="ShockFind using the Octave AMR octree (dataset-agnostic).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("data_path", nargs="?", default=None,
-        help="RAMSES output directory (e.g. output_00021/) or info_*.txt path. "
+        help="Dataset path (RAMSES directory, Arepo HDF5, …). "
              "Not required when --load-octree is given.")
+    parser.add_argument("--interface", default="ramses",
+        choices=["ramses", "arepo"],
+        help="Simulation code / data format to load.")
     parser.add_argument("-out", "--output", default=None,
         help="Directory to save results (default: <data_path>/shockfind_results/)")
     parser.add_argument("-name", "--name", default=None,
@@ -623,6 +567,7 @@ def main():
         handle, sf = run_octree_pipeline(
             args.data_path,
             name=run_name,
+            interface=args.interface,
             octree_save_path=args.save_octree,
             octree_load_path=args.load_octree,
             max_depth=args.max_depth,
