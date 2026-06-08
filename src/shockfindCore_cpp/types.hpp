@@ -155,6 +155,7 @@ struct ShockParams {
     int         field_ref    = 0;
     double      shock_ratio  = 1.1;
     int         offset[3]    = {0, 0, 0};
+    bool        hydro_only   = false;  // no B field: use sonic-only classification
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

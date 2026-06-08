@@ -306,15 +306,29 @@ class core:
                 unit vector perpendicular to shock normal and nt1
         '''
 
+        if method == 'hydro':
+            # No magnetic field: build arbitrary frame perpendicular to ns
+            nsx, nsy, nsz = data['ns']
+            ref = (1.0, 0.0, 0.0) if abs(nsx) < 0.9 else (0.0, 1.0, 0.0)
+            nt2x = nsy*ref[2] - nsz*ref[1]
+            nt2y = nsz*ref[0] - nsx*ref[2]
+            nt2z = nsx*ref[1] - nsy*ref[0]
+            nt2mag = npsqrt(nt2x**2 + nt2y**2 + nt2z**2)
+            nt2x, nt2y, nt2z = nt2x/nt2mag, nt2y/nt2mag, nt2z/nt2mag
+            nt1x = nt2y*nsz - nt2z*nsy
+            nt1y = nt2z*nsx - nt2x*nsz
+            nt1z = nt2x*nsy - nt2y*nsx
+            return [(nt1x, nt1y, nt1z), (nt2x, nt2y, nt2z)]
+
         if method == 'point_field':
             if ('ref' and 'bx' and 'by' and 'bz' and 'ns') in data:
                 # Use the magnetic field at some reference place, use it as
                 # reference vector, b.
                 # nt2 = ns cross b
                 # nt1 = nt2 cross ns
-                
+
                 nsx, nsy, nsz = data['ns']
-                
+
                 bmag = npsqrt(data['bx'][data['ref']]**2. + data['by'][data['ref']]**2. + data['bz'][data['ref']]**2.)
                 try:
                     bx = data['bx'][data['ref']][0]/bmag
@@ -398,7 +412,7 @@ class core:
 
 
     #######################################################################
-    def cylinder(self, Rcyl, line_coords, n_shock, nt1, nt2, rho, pres, vx, vy, vz, bx, by, bz, div):
+    def cylinder(self, Rcyl, line_coords, n_shock, nt1, nt2, rho, pres, vx, vy, vz, div, bx=None, by=None, bz=None):
         '''
         Averaging over a cylinder
         
@@ -492,9 +506,9 @@ class core:
                             continue
 
                         bfield = (
-                            bx[cpx,cpy,cpz],
-                            by[cpx,cpy,cpz],
-                            bz[cpx,cpy,cpz]
+                            bx[cpx,cpy,cpz] if bx is not None else 0.0,
+                            by[cpx,cpy,cpz] if by is not None else 0.0,
+                            bz[cpx,cpy,cpz] if bz is not None else 0.0,
                         )
                         
                         logrho_avg = (N_avg*logrho_avg + log10(rho[cpx,cpy,cpz]))/(N_avg + 1)
@@ -991,45 +1005,46 @@ class core:
         
         result['r']    = rho_pst / rho_pre
         result['rho0'] = rho_pre
-        result['B0']   = average(B_mag[state_pre])
-        
-        p_mag_pre = average(p_mag[state_pre])
-        p_mag_pst = average(p_mag[state_pst])
-        
-        if p_mag_pst / p_mag_pre > 1:
-            result['family']=12
-        elif p_mag_pst / p_mag_pre < 1:
-            result['family']=34
 
-        result['pmag_ratio'] = p_mag_pst/p_mag_pre
-        
         u_pre = average(up[state_pre])
         u_pst = average(up[state_pst])
-        b_pre = average(npsqrt(bp[state_pre]**2. + bt1[state_pre]**2. + bt2[state_pre]**2.))
-        b_pst = average(npsqrt(bp[state_pst]**2. + bt1[state_pst]**2. + bt2[state_pst]**2.))
-        
         vs = (u_pre - u_pst)/(1. - rho_pre/rho_pst)
-        
         result['vs'] = abs(vs)
 
+        csound = sqrt(gam * average(p[state_pre])/rho_pre)
+        result['Mach'] = abs(vs) / csound
 
-        vA_pre = b_pre / sqrt(4* pi * rho_pre)
-        MachAlf = abs(vs) / vA_pre
-        
-        csound=sqrt(gam * average(p[state_pre])/rho_pre)
-        MachSonic = abs(vs) / csound
-        #if MachSonic > 10:
-        #print(f"u_pre: {u_pre/1e5:+.4e} km/s, u_pst: {u_pst/1e5:+.4e} km/s, rho_pre: {rho_pre:+.4e} g/cm^3, csound: {csound/1.0e5:+.4e} km/s, MachSonic: {MachSonic:+.4e}, MachAlf: {MachAlf:+.4e}")
-        #quit()
-        result['Mach']    = MachSonic
-        result['MachAlf'] = MachAlf
-        result['vA'     ] = vA_pre
-        if (result['family']==12 and result['MachAlf'] <= 1):
-            result['flag'] = 3
-        elif (result['family']==34 and result['MachAlf'] > 1):
-            result['flag'] = 3
+        if self.hydro_only:
+            result['family']     = 1    # sonic shock (no B classification)
+            result['vA']         = 0.
+            result['MachAlf']    = 0.
+            result['B0']         = 0.
+            result['pmag_ratio'] = 0.
+            result['flag']       = 0
         else:
-            result['flag'] = 0
+            result['B0'] = average(B_mag[state_pre])
+
+            p_mag_pre = average(p_mag[state_pre])
+            p_mag_pst = average(p_mag[state_pst])
+
+            if p_mag_pst / p_mag_pre > 1:
+                result['family'] = 12
+            elif p_mag_pst / p_mag_pre < 1:
+                result['family'] = 34
+
+            result['pmag_ratio'] = p_mag_pst / p_mag_pre
+
+            b_pre  = average(npsqrt(bp[state_pre]**2. + bt1[state_pre]**2. + bt2[state_pre]**2.))
+            vA_pre = b_pre / sqrt(4 * pi * rho_pre)
+            result['vA']      = vA_pre
+            result['MachAlf'] = abs(vs) / vA_pre if vA_pre > 0 else 0.
+
+            if (result['family'] == 12 and result['MachAlf'] <= 1):
+                result['flag'] = 3
+            elif (result['family'] == 34 and result['MachAlf'] > 1):
+                result['flag'] = 3
+            else:
+                result['flag'] = 0
         
         #if (result['family']==12 and result['MachAlf'] <= 1):
         #    result['flag'] = 3
@@ -1414,8 +1429,10 @@ class core:
                 raise Exception('Reference location out of bounds. Try a smaller number for \'ref\' in the config file.')
                 
             waypoint='trans1'
-            
-            if method_plane == 'point_field':
+
+            if self.hydro_only:
+                nt = self.transerve_direction(data={'ns': n_shock}, method='hydro')
+            elif method_plane == 'point_field':
                 bxline = np.array([field[0][x,y,z] for x,y,z in zip(sx,sy,sz)])
                 byline = np.array([field[1][x,y,z] for x,y,z in zip(sx,sy,sz)])
                 bzline = np.array([field[2][x,y,z] for x,y,z in zip(sx,sy,sz)])
@@ -1427,13 +1444,14 @@ class core:
                     'bz': bzline,
                     'ns': n_shock
                 }
+                nt = self.transerve_direction(data=data, method=method_plane)
             elif method_plane == 'average_field':
                 bxline = np.array([field[0][x,y,z] for x,y,z in zip(sx,sy,sz)])
                 byline = np.array([field[1][x,y,z] for x,y,z in zip(sx,sy,sz)])
                 bzline = np.array([field[2][x,y,z] for x,y,z in zip(sx,sy,sz)])
-                
+
                 region = np.arange(idx_ref2[0],np.where(np.array(plotline)==0)[0])
-                
+
                 data = {
                     'region': region,
                     'bx': bxline,
@@ -1441,12 +1459,12 @@ class core:
                     'bz': bzline,
                     'ns': n_shock
                 }
+                nt = self.transerve_direction(data=data, method=method_plane)
             else:
                 raise Exception('Transverse definition \'' + method_plane + '\' doesn\'t exist. Check config file and documentation for function \'transerve_direction\'.')
-                
+
             waypoint='trans2'
-                
-            nt = self.transerve_direction(data=data, method=method_plane)
+
             nt1x, nt1y, nt1z = nt[0]
             nt2x, nt2y, nt2z = nt[1]
             ###############################          
@@ -1458,7 +1476,10 @@ class core:
             # Compute profiles by averaging through cylinder
             waypoint='cylinder'
             #print(sx)
-            rho_line, p_line, up_line, ut1_line, ut2_line, bp_line, bt1_line, bt2_line, conv_line = self.cylinder(Rcylinder, (sx, sy, sz), n_shock, nt[0], nt[1], rho, pres, vel[0], vel[1], vel[2], field[0], field[1], field[2], div)
+            _bx = None if self.hydro_only else field[0]
+            _by = None if self.hydro_only else field[1]
+            _bz = None if self.hydro_only else field[2]
+            rho_line, p_line, up_line, ut1_line, ut2_line, bp_line, bt1_line, bt2_line, conv_line = self.cylinder(Rcylinder, (sx, sy, sz), n_shock, nt[0], nt[1], rho, pres, vel[0], vel[1], vel[2], div, _bx, _by, _bz)
             ###############################
             #res=[rho_line, p_line, up_line, ut1_line, ut2_line, bp_line, bt1_line, bt2_line, conv_line]
             #if any([resu is [] for resu in res] ): exit("error. empty array.")

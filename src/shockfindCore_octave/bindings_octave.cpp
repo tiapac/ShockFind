@@ -248,6 +248,7 @@ static ShockParams dict_to_params(const py::dict& extra) {
     p.field_ref  = get_int("field_ref",  0);
     p.gamma      = get_dbl("gamma",      5.0/3.0);
     p.shock_ratio= get_dbl("shock_ratio",1.1);
+    p.hydro_only = extra.contains("hydro_only") ? extra["hydro_only"].cast<bool>() : false;
     return p;
 }
 
@@ -541,6 +542,7 @@ PYBIND11_MODULE(shockfindCore_octave, m) {
         .def_property_readonly("vz_arr",
             [](const OctreeHandle& h) {
                 return ptr_to_arr(h.vz, h.tree->ordered_leaf_indices.size()); })
+        // B fields return zero-length array when not present (hydro runs)
         .def_property_readonly("bx_arr",
             [](const OctreeHandle& h) {
                 return ptr_to_arr(h.bx, h.tree->ordered_leaf_indices.size()); })
@@ -550,6 +552,8 @@ PYBIND11_MODULE(shockfindCore_octave, m) {
         .def_property_readonly("bz_arr",
             [](const OctreeHandle& h) {
                 return ptr_to_arr(h.bz, h.tree->ordered_leaf_indices.size()); })
+        .def_property_readonly("has_bfield",
+            [](const OctreeHandle& h) { return h.bx != nullptr; })
         // ── Pre-computed derived arrays ──────────────────────────────────────
         .def_property_readonly("div_v_arr",
             [](const OctreeHandle& h) {

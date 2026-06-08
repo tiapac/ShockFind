@@ -12,6 +12,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Transverse frame helpers
+std::pair<Vec3,Vec3> transverse_hydro(const Vec3& ns);
 std::pair<Vec3,Vec3> transverse_point_field(const std::vector<Vec3>& B_line,
                                             int ref,
                                             const Vec3& ns);
@@ -24,7 +25,8 @@ std::pair<Vec3,Vec3> transverse_average_field(const std::vector<Vec3>& B_line,
 ShockResult flux_capacitor(const LineProfile& prof,
                            double gamma,
                            double shock_ratio = 1.2,
-                           double shock_size  = 3.0);
+                           double shock_size  = 3.0,
+                           bool   hydro_only  = false);
 
 // Shock normal via weighted average over a ball — uniform grid only.
 // Declared here so existing callers compile; the template shock_normal<G>
@@ -119,9 +121,10 @@ inline LineProfile cylinder_average(const FieldDataT<G>& f,
             double vx_v   = field_at(f.vx,   f.grid, cp);
             double vy_v   = field_at(f.vy,   f.grid, cp);
             double vz_v   = field_at(f.vz,   f.grid, cp);
-            double bx_v   = field_at(f.bx,   f.grid, cp);
-            double by_v   = field_at(f.by,   f.grid, cp);
-            double bz_v   = field_at(f.bz,   f.grid, cp);
+            // B fields are optional (nullptr in hydro runs)
+            double bx_v   = f.bx ? field_at(f.bx, f.grid, cp) : 0.0;
+            double by_v   = f.by ? field_at(f.by, f.grid, cp) : 0.0;
+            double bz_v   = f.bz ? field_at(f.bz, f.grid, cp) : 0.0;
             double div_v  = field_at(f.div,  f.grid, cp);
 
             Vec3 vel  {vx_v, vy_v, vz_v};
@@ -198,37 +201,42 @@ inline ShockResult characterise_shock(const CellIndex& candidate,
         return res;
     }
 
-    // 3. Transverse frame from B along the line
-    std::vector<Vec3> B_line;
-    B_line.reserve(line_cells.size());
-    for (const auto& c : line_cells) {
-        B_line.push_back({
-            field_at(fields.bx, fields.grid, c),
-            field_at(fields.by, fields.grid, c),
-            field_at(fields.bz, fields.grid, c)
-        });
-    }
-
-    int centre_pos = -1;
-    for (int i = 0; i < (int)line_coords.size(); ++i)
-        if (line_coords[i] == 0.0) { centre_pos = i; break; }
-    if (centre_pos < 0) centre_pos = static_cast<int>(line_cells.size()) / 2;
-
-    int ref = centre_pos - params.field_ref;
-    if (ref < 0) ref = centre_pos + params.field_ref;
-    ref = std::max(0, std::min(ref, static_cast<int>(B_line.size()) - 1));
-
+    // 3. Transverse frame (from B in MHD, arbitrary perpendicular in hydro)
     Vec3 nt1, nt2;
-    if (params.method_plane == ShockParams::POINT_FIELD) {
-        auto [t1, t2] = transverse_point_field(B_line, ref, ns);
+    if (params.hydro_only) {
+        auto [t1, t2] = transverse_hydro(ns);
         nt1 = t1; nt2 = t2;
     } else {
-        int r_start = std::max(0, ref);
-        int r_end   = std::min(centre_pos, static_cast<int>(B_line.size()));
-        if (r_end <= r_start) r_end = r_start + 1;
-        r_end = std::min(r_end, static_cast<int>(B_line.size()));
-        auto [t1, t2] = transverse_average_field(B_line, r_start, r_end, ns);
-        nt1 = t1; nt2 = t2;
+        std::vector<Vec3> B_line;
+        B_line.reserve(line_cells.size());
+        for (const auto& c : line_cells) {
+            B_line.push_back({
+                fields.bx ? field_at(fields.bx, fields.grid, c) : 0.0,
+                fields.by ? field_at(fields.by, fields.grid, c) : 0.0,
+                fields.bz ? field_at(fields.bz, fields.grid, c) : 0.0
+            });
+        }
+
+        int centre_pos = -1;
+        for (int i = 0; i < (int)line_coords.size(); ++i)
+            if (line_coords[i] == 0.0) { centre_pos = i; break; }
+        if (centre_pos < 0) centre_pos = static_cast<int>(line_cells.size()) / 2;
+
+        int ref = centre_pos - params.field_ref;
+        if (ref < 0) ref = centre_pos + params.field_ref;
+        ref = std::max(0, std::min(ref, static_cast<int>(B_line.size()) - 1));
+
+        if (params.method_plane == ShockParams::POINT_FIELD) {
+            auto [t1, t2] = transverse_point_field(B_line, ref, ns);
+            nt1 = t1; nt2 = t2;
+        } else {
+            int r_start = std::max(0, ref);
+            int r_end   = std::min(centre_pos, static_cast<int>(B_line.size()));
+            if (r_end <= r_start) r_end = r_start + 1;
+            r_end = std::min(r_end, static_cast<int>(B_line.size()));
+            auto [t1, t2] = transverse_average_field(B_line, r_start, r_end, ns);
+            nt1 = t1; nt2 = t2;
+        }
     }
 
     // 4. Cylinder averaging
@@ -236,7 +244,7 @@ inline ShockResult characterise_shock(const CellIndex& candidate,
                                         ns, nt1, nt2, params.Rcylinder);
 
     // 5. Classify
-    res = flux_capacitor(prof, params.gamma, params.shock_ratio, 3.0);
+    res = flux_capacitor(prof, params.gamma, params.shock_ratio, 3.0, params.hydro_only);
 
     // 6. Store location and direction
     if constexpr (std::is_same_v<G, GridAccessor>) {

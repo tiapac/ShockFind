@@ -72,10 +72,22 @@ Vec3 shock_normal_average(const FieldData& f, const CellIndex& idx,
 // ─────────────────────────────────────────────────────────────────────────────
 // Transverse frame
 // ─────────────────────────────────────────────────────────────────────────────
+
+// Hydro fallback: build two arbitrary vectors perpendicular to ns.
+// Picks a reference not parallel to ns, then uses cross products.
+std::pair<Vec3,Vec3> transverse_hydro(const Vec3& ns) {
+    Vec3 ref = (std::abs(ns.x) < 0.9) ? Vec3{1,0,0} : Vec3{0,1,0};
+    Vec3 nt2 = ns.cross(ref).normalized();
+    Vec3 nt1 = nt2.cross(ns).normalized();
+    return {nt1, nt2};
+}
+
 std::pair<Vec3,Vec3> transverse_point_field(const std::vector<Vec3>& B_line,
                                             int ref,
                                             const Vec3& ns) {
     Vec3 b = B_line[ref].normalized();
+    // Fall back to hydro frame when B=0 at the reference point
+    if (b.norm2() == 0.0) return transverse_hydro(ns);
     Vec3 nt2 = ns.cross(b).normalized();
     Vec3 nt1 = nt2.cross(ns);
     return {nt1, nt2};
@@ -91,8 +103,9 @@ std::pair<Vec3,Vec3> transverse_average_field(const std::vector<Vec3>& B_line,
         avg += B_line[i];
         ++n;
     }
-    if (n == 0) return {{0,0,1}, {0,1,0}};
     Vec3 b = avg.normalized();
+    // Fall back to hydro frame when average B=0
+    if (b.norm2() == 0.0) return transverse_hydro(ns);
     Vec3 nt2 = ns.cross(b).normalized();
     Vec3 nt1 = nt2.cross(ns);
     return {nt1, nt2};
@@ -104,7 +117,8 @@ std::pair<Vec3,Vec3> transverse_average_field(const std::vector<Vec3>& B_line,
 ShockResult flux_capacitor(const LineProfile& prof,
                            double gamma,
                            double shock_ratio,
-                           double shock_size) {
+                           double shock_size,
+                           bool hydro_only) {
     ShockResult res;
     int L = static_cast<int>(prof.line.size());
     if (L == 0) { res.flag = 4; return res; }
@@ -176,27 +190,37 @@ ShockResult flux_capacitor(const LineProfile& prof,
     double p_mag_pst = vec_average(p_mag, state_pst_lo, state_pst_hi);
     res.pmag_ratio = (p_mag_pre > 0.0) ? p_mag_pst / p_mag_pre : 0.0;
 
-    if      (p_mag_pst > p_mag_pre) res.family = 12;
-    else if (p_mag_pst < p_mag_pre) res.family = 34;
-    else                            res.family =  0;
-
     double u_pre = vec_average(prof.vp, state_pre_lo, state_pre_hi);
     double u_pst = vec_average(prof.vp, state_pst_lo, state_pst_hi);
     double denom = 1.0 - rho_pre / rho_pst;
     double vs = (denom != 0.0) ? (u_pre - u_pst) / denom : 0.0;
     res.vs = std::abs(vs);
 
-    double b_pre = vec_average_norm(prof.bp, prof.bt1, prof.bt2, state_pre_lo, state_pre_hi);
-    res.vA     = (rho_pre > 0.0) ? b_pre / std::sqrt(FOUR_PI * rho_pre) : 0.0;
-    res.MachAlf = (res.vA > 0.0) ? res.vs / res.vA : 0.0;
-
     double p_pre  = vec_average(prof.pres, state_pre_lo, state_pre_hi);
     double csound = (rho_pre > 0.0) ? std::sqrt(gamma * p_pre / rho_pre) : 0.0;
     res.Mach = (csound > 0.0) ? res.vs / csound : 0.0;
 
-    if      (res.family == 12 && res.MachAlf <= 1.0) res.flag = 3;
-    else if (res.family == 34 && res.MachAlf >  1.0) res.flag = 3;
-    else                                              res.flag = 0;
+    if (hydro_only) {
+        // No magnetic field: sonic shock, family=1, no Alfvénic classification
+        res.family    = 1;
+        res.vA        = 0.0;
+        res.MachAlf   = 0.0;
+        res.B0        = 0.0;
+        res.pmag_ratio = 0.0;
+        res.flag      = 0;
+    } else {
+        if      (p_mag_pst > p_mag_pre) res.family = 12;
+        else if (p_mag_pst < p_mag_pre) res.family = 34;
+        else                            res.family =  0;
+
+        double b_pre = vec_average_norm(prof.bp, prof.bt1, prof.bt2, state_pre_lo, state_pre_hi);
+        res.vA      = (rho_pre > 0.0) ? b_pre / std::sqrt(FOUR_PI * rho_pre) : 0.0;
+        res.MachAlf = (res.vA > 0.0)  ? res.vs / res.vA : 0.0;
+
+        if      (res.family == 12 && res.MachAlf <= 1.0) res.flag = 3;
+        else if (res.family == 34 && res.MachAlf >  1.0) res.flag = 3;
+        else                                              res.flag = 0;
+    }
 
     return res;
 }

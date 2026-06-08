@@ -77,10 +77,12 @@ def _import_shock_finder():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MHD field layout (order = attribute column index in the attrs matrix)
+# Field layouts
 # ─────────────────────────────────────────────────────────────────────────────
 
-SHOCKFIND_FIELDS = ["density", "pressure", "vx", "vy", "vz", "bx", "by", "bz"]
+SHOCKFIND_FIELDS_MHD   = ["density", "pressure", "vx", "vy", "vz", "bx", "by", "bz"]
+SHOCKFIND_FIELDS_HYDRO = ["density", "pressure", "vx", "vy", "vz"]
+SHOCKFIND_FIELDS = SHOCKFIND_FIELDS_MHD  # backward-compatible alias
 
 _RAMSES_FIELD_MAP = {
     "density":  [("gas","density")],
@@ -88,6 +90,7 @@ _RAMSES_FIELD_MAP = {
     "vx":       [("gas","velocity_x")],
     "vy":       [("gas","velocity_y")],
     "vz":       [("gas","velocity_z")],
+    # MHD-only fields — only loaded when hydro_only=False
     "bx":       [("gas","magnetic_field_x")],
     "by":       [("gas","magnetic_field_y")],
     "bz":       [("gas","magnetic_field_z")],
@@ -109,14 +112,21 @@ def load_ramses_for_shockfind(
     info_path: str,
     box=None,
     box_units: str = "code",
-) -> tuple[np.ndarray, np.ndarray]:
+    hydro_only: bool = False,
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
     """
-    Load RAMSES gas cell centres + MHD field values via yt.
+    Load RAMSES gas cell centres + field values via yt.
+
+    Parameters
+    ----------
+    hydro_only : if True, skip magnetic field loading (bx/by/bz).
+                 Use for pure-hydro (non-MHD) RAMSES runs.
 
     Returns
     -------
-    positions : (N, 3) float64 — cell centres normalised to [0,1]^3
-    attrs     : (N, 8) float64 — columns in SHOCKFIND_FIELDS order
+    positions   : (N, 3) float64 — cell centres normalised to [0,1]^3
+    attrs       : (N, K) float64 — columns in field_names order
+    field_names : list[str] — names of the K columns
     """
     yt = _require("yt", "Install yt: pip install yt (or conda install -c conda-forge yt)")
 
@@ -159,8 +169,10 @@ def load_ramses_for_shockfind(
         )
         positions = positions[mask]
 
+    base_fields = SHOCKFIND_FIELDS_HYDRO if hydro_only else SHOCKFIND_FIELDS_MHD
+
     cols = []
-    for name in SHOCKFIND_FIELDS:
+    for name in base_fields:
         val = None
         for yt_key in _RAMSES_FIELD_MAP[name]:
             if yt_key in ds.derived_field_list:
@@ -187,10 +199,11 @@ def load_ramses_for_shockfind(
             else:
                 print(f"Optional field '{opt_name}' (yt key {yt_key}) not found; skipping.")
 
-    all_field_names = SHOCKFIND_FIELDS + optional_loaded
+    all_field_names = base_fields + optional_loaded
     attrs = np.column_stack(cols)
+    mode_label = "hydro" if hydro_only else "MHD"
     extra = f" + {optional_loaded}" if optional_loaded else ""
-    print(f"Loaded {positions.shape[0]:,} RAMSES cells  ({len(SHOCKFIND_FIELDS)} MHD fields{extra})")
+    print(f"Loaded {positions.shape[0]:,} RAMSES cells  ({len(base_fields)} {mode_label} fields{extra})")
     return positions.astype(np.float64, copy=False), attrs.astype(np.float64, copy=False), all_field_names
 
 
@@ -220,6 +233,7 @@ def _find_candidates_full(
     vmag_min: float | None = None,
     use_gradTRho: bool = True,
     gamma: float = 5. / 3.,
+    hydro_only: bool = False,
 ) -> list[int]:
     """
     Find shock candidate leaves — full mirror of the regular-grid shock_finder workflow.
@@ -248,13 +262,15 @@ def _find_candidates_full(
     vx    = np.asarray(handle.vx_arr)
     vy    = np.asarray(handle.vy_arr)
     vz    = np.asarray(handle.vz_arr)
-    bx    = np.asarray(handle.bx_arr)
-    by    = np.asarray(handle.by_arr)
-    bz    = np.asarray(handle.bz_arr)
     div_v = np.asarray(handle.div_v_arr)
     gx    = np.asarray(handle.grad_rho_x)
     gy    = np.asarray(handle.grad_rho_y)
     gz    = np.asarray(handle.grad_rho_z)
+    # B arrays are empty in hydro runs (handle.has_bfield == False)
+    if not hydro_only:
+        bx = np.asarray(handle.bx_arr)
+        by = np.asarray(handle.by_arr)
+        bz = np.asarray(handle.bz_arr)
 
     rho_safe = np.where(np.abs(rho) > 1e-30, np.abs(rho), 1e-30)
 
@@ -295,10 +311,14 @@ def _find_candidates_full(
     # ── Mach number filter ────────────────────────────────────────────────────
     if mach_min is not None and mach_min > 0.0:
         cs   = np.sqrt(gamma * np.maximum(pres, 0.0) / rho_safe)
-        bmag = np.sqrt(bx**2 + by**2 + bz**2)
-        ca   = bmag / np.sqrt(4.0 * np.pi * rho_safe)
         vmag = np.sqrt(vx**2 + vy**2 + vz**2)
-        mach = vmag / np.maximum(0.7 * np.minimum(cs, ca), 1e-30)
+        if hydro_only:
+            # Sonic Mach only — no Alfvén speed
+            mach = vmag / np.maximum(cs, 1e-30)
+        else:
+            bmag = np.sqrt(bx**2 + by**2 + bz**2)
+            ca   = bmag / np.sqrt(4.0 * np.pi * rho_safe)
+            mach = vmag / np.maximum(0.7 * np.minimum(cs, ca), 1e-30)
         candidates = candidates & (mach >= mach_min)
 
     # ── Velocity magnitude filter ─────────────────────────────────────────────
@@ -341,6 +361,8 @@ def run_octree_pipeline(
     mach_min: float | None = 1.5,
     vmag_min: float | None = None,
     use_gradTRho: bool = True,
+    # ── Physics mode ──────────────────────────────────────────────────────────
+    hydro_only: bool = False,
     # ── Characterisation parameters (mirror of shock_finder.extra_params) ─────
     gamma: float = 5. / 3.,
     periodic: list | None = None,
@@ -389,7 +411,8 @@ def run_octree_pipeline(
               f"(dx = 1/{1 << handle.max_depth} = {handle.cell_size:.3e})")
     else:
         # 1. Load RAMSES data
-        positions, attrs, field_names = load_ramses_for_shockfind(info_path, box=box, box_units=box_units)
+        positions, attrs, field_names = load_ramses_for_shockfind(
+            info_path, box=box, box_units=box_units, hydro_only=hydro_only)
 
         # 2. Build octree
         print("Building octree …")
@@ -424,6 +447,7 @@ def run_octree_pipeline(
         vmag_min=vmag_min,
         use_gradTRho=use_gradTRho,
         gamma=gamma,
+        hydro_only=hydro_only,
     )
     print(f"  {len(candidates):,} candidate leaves")
 
@@ -445,6 +469,7 @@ def run_octree_pipeline(
         "line_range":   line_range,
         "field_ref":    field_ref,
         "shock_ratio":  shock_ratio,
+        "hydro_only":   hydro_only,
     }
     data, header = sco.characterise_shocks_octree(handle, candidates, shock_params, quiet)
 
@@ -519,6 +544,9 @@ def main():
         help="Minimum velocity magnitude filter (dataset velocity units).")
     filt.add_argument("--no-gradTRho", action="store_true",
         help="Disable ∇T·∇ρ > 0 filter (enabled by default, mirrors use_gradTRho=True).")
+    filt.add_argument("--hydro-only", action="store_true",
+        help="Pure-hydro mode: skip magnetic field loading and use sonic-only "
+             "shock classification (family=1 instead of fast=12/slow=34).")
 
     # ── Characterisation parameters (mirrors extra_params + analyse_candidates) ─
     char = parser.add_argument_group("characterisation parameters")
@@ -611,6 +639,7 @@ def main():
             mach_min=args.mach_min,
             vmag_min=args.vmag_min,
             use_gradTRho=not args.no_gradTRho,
+            hydro_only=args.hydro_only,
             gamma=args.gamma,
             periodic=[not args.no_periodic] * 3,
             method_norm=args.method_norm,
