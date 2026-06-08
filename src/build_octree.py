@@ -1,42 +1,30 @@
 """build_octree.py — Dataset-agnostic octree builder.
 
-Loads a simulation snapshot through the selected interface, builds an Octave
-octree, and saves it to an HDF5 file suitable for ShockFind or standalone use.
+Load any supported simulation snapshot through the selected interface and
+produce a ShockFind-compatible OctreeHandle.  Optionally save to HDF5 for
+re-use across multiple shock-finding runs.
+
+Works as a standalone script (save to HDF5) or as a library function that
+returns an OctreeHandle ready for the shockfind pipeline.
 
 Usage (standalone):
-    # Arepo SPH/moving-mesh snapshot
-    python src/build_octree.py arepo snapshot_082.hdf5 \\
-        --max-depth 12 --save-octree snapshot_082_octree.h5
-
-    # RAMSES AMR output
-    python src/build_octree.py ramses /path/to/output_00021 \\
-        --max-depth 14 --save-octree output_21_octree.h5
+    python src/build_octree.py ramses output_00021/ --save-octree oct.h5
+    python src/build_octree.py arepo  snapshot_082.hdf5 --save-octree oct.h5
 
 Usage (library):
-    from src.build_octree import build_from_interface
-    from src.interfaces   import get_interface
-
-    iface = get_interface("arepo", "snap.hdf5", max_depth=12, hydro_only=False)
-    tree, field_names = build_from_interface(iface, save_path="snap_octree.h5")
-
-Workflow with ShockFind:
-    # Step 1 — build the octree once (can be expensive for Arepo HSML data):
-    python src/build_octree.py arepo snapshot_082.hdf5 --save-octree oct.h5
-
-    # Step 2 — run shock finding, loading the pre-built octree:
-    python src/octree_shockfind_pipeline.py --load-octree oct.h5
+    from src.build_octree import build_octree
+    handle, field_names = build_octree(
+        "output_00021", interface="ramses",
+        max_depth=14, hydro_only=False, save_path="oct.h5")
 """
 from __future__ import annotations
 
 import os
 import sys
+import tempfile
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Imports
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _import_shockfind_octave():
-    """Import shockfindCore_octave (needed for the non-HSML RAMSES build path)."""
     try:
         import shockfindCore_octave
         return shockfindCore_octave
@@ -58,83 +46,114 @@ def _import_shockfind_octave():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Core build function
+# Public API
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_from_interface(iface, *, save_path: str | None = None):
+def build_octree(
+    data_path: str,
+    interface: str,
+    *,
+    save_path: str | None = None,
+    # sub-box
+    box=None,
+    box_units: str = "code",
+    # physics
+    hydro_only: bool = False,
+    # particle-code options (ignored for AMR)
+    part_type:   int   = 0,
+    hsml_factor: float = 1.0,
+    hsml_geom:   str   = "sphere",
+    split_mass:  bool  = False,
+    # octree build — None means use the interface's code-specific default
+    max_depth:   int | None = None,
+    min_depth:   int | None = None,
+    max_members: int | None = None,
+    max_nodes:   int | None = None,
+):
     """
-    Build an octree from any OctaveInterface and optionally save to HDF5.
+    Build an OctreeHandle from any simulation snapshot.
 
-    For SPH / moving-mesh codes (iface.uses_hsml == True):
-        Uses octree3d.Octree3D with HSML deposition.
-        Saves via tree.write_all_hdf5() — readable by shockfindCore_octave.load_octree().
+    Selects the loader via ``interface`` ('ramses', 'arepo', …).
+    If ``save_path`` is given the octree is serialised to HDF5; this file can
+    be passed to run_octree_pipeline(load_octree=...) to skip rebuilding.
 
-    For AMR / grid codes (iface.uses_hsml == False):
-        Uses shockfindCore_octave.build_octree() directly.
-        Saves via sco.save_octree() — readable by shockfindCore_octave.load_octree().
-
-    Parameters
-    ----------
-    iface     : OctaveInterface instance (already configured)
-    save_path : HDF5 output path.  When None the octree is returned but not saved.
+    HSML-based codes (Arepo): the octree is built via octree3d with HSML
+    deposition, then converted to an OctreeHandle through a temporary HDF5
+    file (or ``save_path`` if provided, saving one extra write).
 
     Returns
     -------
-    tree_or_handle : octree3d.Octree3D  or  shockfindCore_octave.OctreeHandle
-    field_names    : list[str]
+    handle      : shockfindCore_octave.OctreeHandle
+    field_names : list[str]
     """
-    from src.interfaces import _import_octave
+    from src.interfaces import get_interface, _import_octave
 
-    data = iface.load()
+    # Build interface — only pass overrides; let the config apply its defaults
+    kwargs: dict = dict(
+        box=box, box_units=box_units, hydro_only=hydro_only,
+        part_type=part_type, hsml_factor=hsml_factor,
+        hsml_geom=hsml_geom, split_mass=split_mass,
+    )
+    if max_depth   is not None: kwargs["max_depth"]   = max_depth
+    if min_depth   is not None: kwargs["min_depth"]   = min_depth
+    if max_members is not None: kwargs["max_members"] = max_members
+    if max_nodes   is not None: kwargs["max_nodes"]   = max_nodes
+
+    iface = get_interface(interface, data_path, **kwargs)
+    data  = iface.load()
+    sco   = _import_shockfind_octave()
 
     if iface.uses_hsml:
-        # ── SPH / moving-mesh: HSML deposition ────────────────────────────
-        oc = _import_octave()
-
+        # ── SPH / moving-mesh: HSML deposition via octree3d ────────────────
+        oc   = _import_octave()
         tree = oc.Octree3D(
             max_depth   = iface.max_depth,
             min_depth   = iface.min_depth,
             max_nodes   = iface.max_nodes,
             max_members = iface.max_members,
         )
-
         iface.register_fields(tree)
-
         tree.enable_hsml_deposit(geom=iface.hsml_geom, split_mass=iface.split_mass)
         print(f"Depositing {len(data.positions):,} particles "
               f"(hsml_geom={iface.hsml_geom}) …")
         tree.add_points_hsml(data.positions, data.hsml, data.attrs, data.particle_ids)
+        print(f"Built: {tree.num_leaves():,} leaves  {tree.num_nodes():,} nodes"
+              f"  (max_depth={iface.max_depth})")
 
-        print(
-            f"Built octree: {tree.num_leaves():,} leaves  {tree.num_nodes():,} nodes"
-            f"  (max_depth={iface.max_depth})"
-        )
-
+        # Convert to OctreeHandle via HDF5
         if save_path is not None:
-            tree.write_all_hdf5(save_path, data.field_names)
-            print(f"Octree saved to {save_path}")
+            hdf_path = save_path
+            _cleanup = False
+        else:
+            hdf_path = tempfile.mktemp(suffix="_octave_tmp.h5")
+            _cleanup = True
 
-        return tree, data.field_names
+        tree.write_all_hdf5(hdf_path, data.field_names)
+        handle = sco.load_octree(hdf_path)
+
+        if _cleanup:
+            try:
+                os.unlink(hdf_path)
+            except OSError:
+                pass
 
     else:
-        # ── AMR / grid: direct build ───────────────────────────────────────
-        sco = _import_shockfind_octave()
-
+        # ── AMR / grid: direct build via shockfindCore_octave ──────────────
         print(f"Building octree from {len(data.positions):,} cells …")
         handle = sco.build_octree(
             data.positions, data.attrs, data.field_names,
             **iface.octree_params,
         )
-        print(
-            f"Built octree: {handle.num_leaves:,} leaves  {handle.num_nodes:,} nodes"
-            f"  (dx = 1/{1 << handle.max_depth} = {handle.cell_size:.3e})"
-        )
+        print(f"Built: {handle.num_leaves:,} leaves  {handle.num_nodes:,} nodes"
+              f"  (dx = 1/{1 << handle.max_depth} = {handle.cell_size:.3e})")
 
         if save_path is not None:
             sco.save_octree(handle, save_path)
-            print(f"Octree saved to {save_path}")
 
-        return handle, data.field_names
+    if save_path is not None:
+        print(f"Octree saved to {save_path}")
+
+    return handle, data.field_names
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -146,57 +165,43 @@ def main():
 
     parser = argparse.ArgumentParser(
         description=(
-            "Build an Octave octree from any supported simulation code.\n\n"
+            "Build an Octave octree from any supported simulation code and save to HDF5.\n\n"
             "Examples:\n"
-            "  python src/build_octree.py arepo snap.hdf5 --save-octree snap_oct.h5\n"
-            "  python src/build_octree.py ramses output_00021/ --save-octree out21_oct.h5"
+            "  python src/build_octree.py ramses output_00021/     --save-octree out21.h5\n"
+            "  python src/build_octree.py arepo  snapshot_082.hdf5 --save-octree snap82.h5"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-
-    parser.add_argument(
-        "interface", choices=["arepo", "ramses"],
-        help="Simulation code / data format to load.")
-    parser.add_argument(
-        "data_path",
+    parser.add_argument("interface", choices=["arepo", "ramses"],
+        help="Simulation code / data format.")
+    parser.add_argument("data_path",
         help="Snapshot file (Arepo HDF5) or output directory (RAMSES).")
-    parser.add_argument(
-        "--save-octree", default=None, metavar="PATH",
-        help="Save octree to this HDF5 file.  "
-             "Default: <data_path_stem>_octree.h5")
+    parser.add_argument("--save-octree", default=None, metavar="PATH",
+        help="HDF5 output path (default: <stem>_octree.h5).")
 
-    # ── octree parameters ─────────────────────────────────────────────────────
     og = parser.add_argument_group("octree")
     og.add_argument("--max-depth",   type=int,   default=None,
-        help="Finest octree level (default: 12 for Arepo, 14 for RAMSES).")
+        help="Finest level (default: 12 Arepo / 14 RAMSES).")
     og.add_argument("--min-depth",   type=int,   default=None,
-        help="Coarsest pre-built level (default: 2 for Arepo, 3 for RAMSES).")
+        help="Coarsest pre-built level (default: 2 Arepo / 3 RAMSES).")
     og.add_argument("--max-members", type=int,   default=None,
-        help="Max data points per leaf (default: 8 for Arepo, 1 for RAMSES).")
+        help="Max points per leaf (default: 8 Arepo / 1 RAMSES).")
     og.add_argument("--max-nodes",   type=int,   default=None)
 
-    # ── physics ───────────────────────────────────────────────────────────────
     pg = parser.add_argument_group("physics")
     pg.add_argument("--hydro-only", action="store_true",
-        help="Skip magnetic field loading (hydro-only run, no B field).")
+        help="Skip magnetic field loading (no B field).")
 
-    # ── HSML (Arepo / SPH) ────────────────────────────────────────────────────
-    hg = parser.add_argument_group("HSML — Arepo / SPH codes")
-    hg.add_argument("--part-type",   type=int,   default=0,
-        help="Arepo particle type to load (0 = gas).")
-    hg.add_argument("--hsml-factor", type=float, default=1.0,
-        help="Scale factor applied to stored/computed HSML.")
-    hg.add_argument("--hsml-geom",   default="sphere", choices=["sphere", "cube"],
-        help="HSML influence region geometry.")
-    hg.add_argument("--split-mass",  action="store_true",
-        help="Divide mass evenly among intersecting leaves (mass-conserving).")
+    hg = parser.add_argument_group("HSML (Arepo / SPH)")
+    hg.add_argument("--part-type",   type=int,   default=0)
+    hg.add_argument("--hsml-factor", type=float, default=1.0)
+    hg.add_argument("--hsml-geom",   default="sphere", choices=["sphere", "cube"])
+    hg.add_argument("--split-mass",  action="store_true")
 
-    # ── sub-box ───────────────────────────────────────────────────────────────
-    bg = parser.add_argument_group(
-        "sub-box",
-        "Two modes (mutually exclusive):\n"
-        "  1) --box XMIN XMAX YMIN YMAX ZMIN ZMAX  — explicit corners in code units\n"
-        "  2) --center CX CY CZ --box-side S        — cube centred at (CX,CY,CZ)")
+    bg = parser.add_argument_group("sub-box",
+        "Two modes:\n"
+        "  --box XMIN XMAX YMIN YMAX ZMIN ZMAX  (explicit corners, code units)\n"
+        "  --center CX CY CZ --box-side S        (centred cube, code units)")
     bg.add_argument("--box", nargs=6, type=float,
         metavar=("XMIN","XMAX","YMIN","YMAX","ZMIN","ZMAX"), default=None)
     bg.add_argument("--center", nargs=3, type=float,
@@ -208,7 +213,6 @@ def main():
     if args.box is not None and (args.center is not None or args.box_side is not None):
         parser.error("--box and --center/--box-side are mutually exclusive")
 
-    # Resolve sub-box
     from src.interfaces import OctaveInterface
     box, box_units = OctaveInterface.parse_box(
         box=args.box, center=args.center, box_side=args.box_side)
@@ -218,31 +222,28 @@ def main():
               f"y=[{box[2]:.4g},{box[3]:.4g}]  "
               f"z=[{box[4]:.4g},{box[5]:.4g}]")
 
-    # Resolve save path
     save_path = args.save_octree
     if save_path is None:
         stem = os.path.splitext(os.path.basename(args.data_path.rstrip("/")))[0]
         save_path = f"{stem}_octree.h5"
         print(f"--save-octree not set; saving to {save_path}")
 
-    # Build kwargs — only pass non-None overrides (let interface apply its defaults)
-    kwargs: dict = dict(
-        box=box,
-        box_units=box_units,
-        hydro_only=args.hydro_only,
-        part_type=args.part_type,
-        hsml_factor=args.hsml_factor,
-        hsml_geom=args.hsml_geom,
-        split_mass=args.split_mass,
+    build_octree(
+        args.data_path,
+        args.interface,
+        save_path    = save_path,
+        box          = box,
+        box_units    = box_units,
+        hydro_only   = args.hydro_only,
+        part_type    = args.part_type,
+        hsml_factor  = args.hsml_factor,
+        hsml_geom    = args.hsml_geom,
+        split_mass   = args.split_mass,
+        max_depth    = args.max_depth,
+        min_depth    = args.min_depth,
+        max_members  = args.max_members,
+        max_nodes    = args.max_nodes,
     )
-    if args.max_depth   is not None: kwargs["max_depth"]   = args.max_depth
-    if args.min_depth   is not None: kwargs["min_depth"]   = args.min_depth
-    if args.max_members is not None: kwargs["max_members"] = args.max_members
-    if args.max_nodes   is not None: kwargs["max_nodes"]   = args.max_nodes
-
-    from src.interfaces import get_interface
-    iface = get_interface(args.interface, args.data_path, **kwargs)
-    build_from_interface(iface, save_path=save_path)
 
 
 if __name__ == "__main__":
