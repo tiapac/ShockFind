@@ -37,22 +37,37 @@ def _require(name: str, hint: str):
 
 def _import_shockfind_octave():
     """Import the shockfindCore_octave C++ extension."""
-    try:
-        import shockfindCore_octave
-        return shockfindCore_octave
-    except ImportError:
-        pass
     src_dir = os.path.dirname(os.path.abspath(__file__))
-    build_so = os.path.join(src_dir, "shockfindCore_octave", "build")
-    if os.path.isdir(build_so):
-        sys.path.insert(0, build_so)
+    search_dirs = [
+        src_dir,
+        os.path.join(src_dir, "shockfindCore_octave", "build"),
+    ]
+    import_errors = []
+
+    for path in search_dirs:
+        if not os.path.isdir(path):
+            continue
+
+        added = False
+        if path not in sys.path:
+            sys.path.insert(0, path)
+            added = True
+
         try:
             import shockfindCore_octave
             return shockfindCore_octave
-        except ImportError:
-            sys.path.pop(0)
+        except ImportError as exc:
+            import_errors.append(f"{path}: {exc}")
+            if added:
+                sys.path.remove(path)
+
+    detail = "\n".join(f"  - {msg}" for msg in import_errors)
+    if detail:
+        detail = f"\nTried import paths:\n{detail}\n"
     raise ImportError(
-        "shockfindCore_octave not found. Build it with:\n"
+        "shockfindCore_octave could not be imported."
+        f"{detail}"
+        "Build it with:\n"
         "  ./setup.sh --octave [--octave-src /path/to/Octave/src]"
     )
 

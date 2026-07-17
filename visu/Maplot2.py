@@ -275,9 +275,7 @@ if __name__ == "__main__":
     pos = 4
     for i in range(7,14):
         logger.info(f"Adding plot for index {i} - {header[i]}...")
-        add_a_conditioned_grid(
-                            sel_cond = shocks[7] > 0.0, # only moving shocks (v_s > 0, as in SOUFFLE)
-                            # sel_cond = True,
+        add_a_conditioned_grid(sel_cond = shocks[7] > 1e5, # only shocks moving at at least a km/s
                             qidx     = i,
                             title    = header[i],
                             ufunc    = lambda a: a,
@@ -307,7 +305,7 @@ if __name__ == "__main__":
         plotter.add_slider_widget(
             callback     = lambda value: engineD(10**value),
             rng          = [-2.5, 0],
-            value        = -1,
+            value        = -1.0,
             title        = "Log10(Diffuse)",
             pointa       = (0.8, 0.8),
             pointb       = (1.0, 0.8),

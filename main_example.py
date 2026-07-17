@@ -24,7 +24,7 @@ parser.add_argument("-rescale",'--rescale', type=float, default=0, help='Rescale
 parser.add_argument("-plot",'--plot', action='store_true', help='Show plots after analysis')
 parser.add_argument("-quiet",'--quiet', action='store_true', help='Run analysis without printing progress messages')
 parser.add_argument("-python",'--python', action='store_true', help='Use Python implementation for candidate analysis (slower but more flexible)')
-parser.add_argument("-dp",'--data-path', type=str, default="/mnt/beegfs/projects/hpcc250512a2/mpacicco/simulations/BarrosBugFix/outputs_blowoutOK_double/", help='Path to simulation data (default: see file)')
+parser.add_argument("-dp",'--data-path', type=str, default=None, help='Path to simulation data (default: see file)')
 parser.add_argument("-owc",'--overwrite-cache', action='store_true', help='Overwrite cached data and load from scratch')
 args = parser.parse_args()
 
@@ -43,7 +43,7 @@ setup_logger("ShockFind",            level=loglevels.INFO)   # show ShockFind li
 
 
 level= args.level if args.level is not None else 8
-outnumb = args.outnumb if args.outnumb is not None else 21
+outnumb = args.outnumb if args.outnumb is not None else 41
 cube_dims = 2**(args.dims_level if args.dims_level is not None else 8)
 
 analysis_name = "LB_double"
@@ -54,9 +54,7 @@ SNAPSHOT_PREFIX = f"output_{outnumb:05d}"
 
 
 
-# DATA_PATH = "/mnt/beegfs/projects/hpcc250512a2/mpacicco/simulations/BarrosBugFix/outputs_BlowoutHighRes11_only/"
-DATA_PATH = args.data_path if args.data_path is not None else "/mnt/beegfs/projects/hpcc250512a2/mpacicco/simulations/BarrosBugFix/outputs_blowoutOK_double/"
-
+DATA_PATH = args.data_path if args.data_path is not None else "/mnt/beegfs/projects/hpcc250512a2/mpacicco/SimulationLocaBubble/LBdefault_hres_interior/"
 snap_path  = DATA_PATH + SNAPSHOT_PREFIX
 
 RESULTS_PATH = DATA_PATH + "shockfind_results/"
@@ -103,34 +101,12 @@ if __name__=="__main__":
             
             
             if level <= 8:
-                dens, cube = ds.get_cube(level=level, 
+                dens, cube = ds.get_cube(level=level,
                                         field="density",
                                         ghost=1,
-                                        center=center_code, 
+                                        center=center_code,
                                         length=length_code,
                                         dims=cube_dims)
-            
-            
-            elif level > 8:
-                directory2 = f"{CACHE_PATH}/cached_heavy_lvl_{level}_output_{outnumb:05d}/"
-                
-                os.makedirs(directory2, exist_ok=True)
-                 
-                for name in names:
-                    with open(directory2+"%s.pkl"%name, 'wb') as handle:
-                        if name=="dx":
-                            c=pickle.dump(dx, handle)      
-                        else:
-                            data,cube=ds.get_cube(level=level,
-                                                field=name,
-                                                ghost=1,
-                                                center=center_code, 
-                                                length=length_code,
-                                                dims=cube_dims)
-                            c=pickle.dump(data.in_cgs().d, handle)
-                            del data,cube,c
-                            gc.collect()                       
-            else:
                 vx  =  cube["gas",  "velocity_x"].in_cgs().d
                 vy  =  cube["gas",  "velocity_y"].in_cgs().d
                 vz  =  cube["gas",  "velocity_z"].in_cgs().d
@@ -140,10 +116,34 @@ if __name__=="__main__":
                 P   =  cube["gas",  "pressure"        ].in_cgs().d
                 rho =  cube["gas",  "density"].in_cgs().d
                 datas = [vx,vy,vz,Bx,By,Bz,P,rho,dx]
-                #os.mkdir("pickled_data_from_SNR")
                 with open(CACHE_PATH+f"/cached_lvl_{level}_dims_{cube_dims}_output_{outnumb:05d}.pkl", 'wb') as handle:
                     pickle.dump(datas, handle)
                 return datas
+
+            elif level > 8:
+                directory2 = f"{CACHE_PATH}/cached_heavy_lvl_{level}_output_{outnumb:05d}/"
+
+                os.makedirs(directory2, exist_ok=True)
+
+                for name in names:
+                    with open(directory2+"%s.pkl"%name, 'wb') as handle:
+                        if name=="dx":
+                            c=pickle.dump(dx, handle)
+                        else:
+                            data,cube=ds.get_cube(level=level,
+                                                field=name,
+                                                ghost=1,
+                                                center=center_code,
+                                                length=length_code,
+                                                dims=cube_dims)
+                            c=pickle.dump(data.in_cgs().d, handle)
+                            del data,cube,c
+                            gc.collect()
+                a = []
+                for name in names:
+                    with open(directory2+"%s.pkl"%name, 'rb') as handle:
+                        a.append(pickle.load(handle))
+                return a
         try:
             if args.overwrite_cache:
                 raise RuntimeError("overwrite cache flag set, loading from scratch")

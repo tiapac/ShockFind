@@ -197,4 +197,7 @@ struct ShockResult {
     // Quality flags
     int    peak_flag  = 0;    // 1 if convergence peak is centred
     int    flag       = 0;    // 0=ok, 1=density threshold, 2=edge, 3=B/Mach inconsistent, 4=no conv
+    // AMR cell geometry (octree path only; -1 / 0 on the uniform grid path)
+    int    level      = -1;   // AMR refinement level the candidate cell sits at
+    double volume     = 0.0;  // cell volume in normalised [0,1]^3 units: (1/2^level)^3
 };
