@@ -129,7 +129,7 @@ if [ "$USE_OCTAVE" -eq 1 ]; then
     cmake -B "$OCT_DIR/build" -S "$OCT_DIR" \
           -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
           -Dpybind11_DIR="$PYBIND_DIR" \
-          -DOCTAVE_SRC_DIR="$OCTAVE_SRC" \
+          -DOCTAVE_S/mnt/beegfs/projects/hpcc250512a2/mpacicco/SimulationLocaBubble/LBdefailt_hres_interiorRC_DIR="$OCTAVE_SRC" \
           -Wno-dev
     cmake --build "$OCT_DIR/build" -j"$NPROC"
     cmake --install "$OCT_DIR/build"

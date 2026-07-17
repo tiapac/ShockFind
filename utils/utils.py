@@ -29,3 +29,8 @@ class utils:
                 ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
                 ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
                 return ax
+        def flatten(xss):
+                return [x for xs in xss for x in xs]
+
+def flatten(xss):
+        return [x for xs in xss for x in xs]

@@ -274,6 +274,8 @@ static py::tuple results_to_python(const std::vector<ShockResult>& results) {
     auto pmag_arr    = py::array_t<double>(N);
     auto peak_arr    = py::array_t<int>   (N);
     auto flag_arr    = py::array_t<int>   (N);
+    auto level_arr   = py::array_t<int>   (N);
+    auto volume_arr  = py::array_t<double>(N);
 
     auto xb  = loc_x      .mutable_unchecked<1>();
     auto yb  = loc_y      .mutable_unchecked<1>();
@@ -292,6 +294,8 @@ static py::tuple results_to_python(const std::vector<ShockResult>& results) {
     auto pmb = pmag_arr   .mutable_unchecked<1>();
     auto pkb = peak_arr   .mutable_unchecked<1>();
     auto flb = flag_arr   .mutable_unchecked<1>();
+    auto lvb = level_arr  .mutable_unchecked<1>();
+    auto vob = volume_arr .mutable_unchecked<1>();
 
     for (int i = 0; i < N; ++i) {
         const ShockResult& r = results[i];
@@ -301,6 +305,7 @@ static py::tuple results_to_python(const std::vector<ShockResult>& results) {
         vAb[i] = r.vA;     mAb[i] = r.MachAlf; msb[i] = r.Mach;
         rb [i] = r.r;      r0b[i] = r.rho0;    B0b[i] = r.B0;
         pmb[i] = r.pmag_ratio; pkb[i] = r.peak_flag; flb[i] = r.flag;
+        lvb[i] = r.level;  vob[i] = r.volume;
     }
 
     py::list data;
@@ -312,10 +317,12 @@ static py::tuple results_to_python(const std::vector<ShockResult>& results) {
     data.append(r_arr);   data.append(rho0_arr);
     data.append(B0_arr);  data.append(pmag_arr);
     data.append(peak_arr); data.append(flag_arr);
+    data.append(level_arr); data.append(volume_arr);
 
     py::list col_names;
     for (const char* h : {"x","y","z","nx","ny","nz","Family","vs","vA",
-                          "MachAlf","Mach","r","rho0","B0","pmag_ratio","peak","FLAG"})
+                          "MachAlf","Mach","r","rho0","B0","pmag_ratio","peak","FLAG",
+                          "level","volume"})
         col_names.append(h);
 
     return py::make_tuple(data, py::make_tuple(py::none(), col_names));
@@ -363,6 +370,11 @@ static py::tuple py_characterise_shocks_octree(
             r.loc_x = nd.coord.x << shift;
             r.loc_y = nd.coord.y << shift;
             r.loc_z = nd.coord.z << shift;
+            // Cell volume from the AMR level: a level-L cell has edge length
+            // 1/2^L in normalised [0,1]^3 units, so volume = (1/2^L)^3.
+            r.level = nd.level;
+            const double dx_level = 1.0 / static_cast<double>(1u << nd.level);
+            r.volume = dx_level * dx_level * dx_level;
         }
         results[static_cast<size_t>(ci)] = r;
 
@@ -694,7 +706,9 @@ quiet      : bool        — suppress progress output
 
 Returns
 -------
-(data, header) — same 17-array layout as shockfindCore_cpp.characterise_shocks().
-  loc_x = leaf node index, loc_y = refinement level, loc_z = 0.
+(data, header) — same 17-array layout as shockfindCore_cpp.characterise_shocks(),
+  plus two AMR-only trailing columns:
+    level  = AMR refinement level of the candidate's leaf cell
+    volume = cell volume in normalised [0,1]^3 units, (1/2^level)^3
 )");
 }

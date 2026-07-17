@@ -231,7 +231,8 @@ if __name__ == "__main__":
     #global actor_list  
     actor_list= []
     size        = 20  # button size
-    pointsize   = 1.8 # base size of the points in the plot. The are then "splattered" in a gaussian profile
+    # pointsize   = 1.8 # base size of the points in the plot. The are then "splattered" in a gaussian profile
+    pointsize   = 0.8 # base size of the points in the plot. The are then "splattered" in a gaussian profile
       # list of actors used to apply general changes to the scene
                       # updated at the creation of each actor
     diffusivity = 0.1 # set how "luminous the points are. "
@@ -274,9 +275,7 @@ if __name__ == "__main__":
     pos = 4
     for i in range(7,14):
         logger.info(f"Adding plot for index {i} - {header[i]}...")
-        add_a_conditioned_grid(
-                            sel_cond = shocks[7] > 0.0, # only shocks moving at at least a km/s
-                            # sel_cond = True, # only shocks moving at at least a km/s
+        add_a_conditioned_grid(sel_cond = shocks[7] > 1e5, # only shocks moving at at least a km/s
                             qidx     = i,
                             title    = header[i],
                             ufunc    = lambda a: a,
@@ -305,8 +304,8 @@ if __name__ == "__main__":
         engineD = apply_allD(actor_list, plotter)
         plotter.add_slider_widget(
             callback     = lambda value: engineD(10**value),
-            rng          = [-2, 0],
-            value        = -1,
+            rng          = [-2.5, 0],
+            value        = -1.0,
             title        = "Log10(Diffuse)",
             pointa       = (0.8, 0.8),
             pointb       = (1.0, 0.8),
