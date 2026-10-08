@@ -12,9 +12,12 @@ extension has not been compiled yet.
 import os as _os
 import glob as _glob
 import importlib.util as _ilu
+import importlib.machinery as _ilm
 
-_build_dir = _os.path.join(_os.path.dirname(__file__), "build")
-_so_files = _glob.glob(_os.path.join(_build_dir, "shockfindCore_cpp*.so"))
+# build*/ directories (one per toolchain); only an extension for this interpreter loads.
+_here = _os.path.dirname(__file__)
+_so_files = sorted(f for f in _glob.glob(_os.path.join(_here, "build*", "shockfindCore_cpp*.so"))
+                   if f.endswith(tuple(_ilm.EXTENSION_SUFFIXES[:1])))
 
 if _so_files:
     try:

@@ -68,27 +68,29 @@ def _import_shockfind_octave():
         "shockfindCore_octave could not be imported."
         f"{detail}"
         "Build it with:\n"
-        "  ./setup.sh --octave [--octave-src /path/to/Octave/src]"
+        "  ./setup.sh --octave [/path/to/Octave/src]"
     )
 
 
 def _import_shock_finder():
-    """Import shock_finder from the ShockFind package.
+    """Import shock_finder from the ShockFind package of this checkout.
 
     ShockFind uses relative imports internally (from ..utils.utils import utils),
-    so it must be imported as a proper package — not as a bare src.* module.
-    We ensure the parent of the ShockFind directory is on sys.path so Python
-    resolves it as 'ShockFind', then use the package's own __init__ re-export.
+    so it must be imported as a package. The checkout directory need not be called
+    ShockFind (e.g. codes/ShockFindOct), and another clone may be importable as
+    ShockFind through PYTHONPATH: load this checkout explicitly under that name.
     """
-    src_dir        = os.path.dirname(os.path.abspath(__file__))  # .../ShockFind/src
-    shockfind_root = os.path.dirname(src_dir)                    # .../ShockFind
-    pkg_root       = os.path.dirname(shockfind_root)             # .../Shockind_ground
-
-    if pkg_root not in sys.path:
-        sys.path.insert(0, pkg_root)
-
-    from ShockFind import shock_finder as sf_cls
-    return sf_cls
+    import importlib.util
+    shockfind_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    pkg = sys.modules.get("ShockFind")
+    if pkg is None or os.path.dirname(os.path.abspath(pkg.__file__)) != shockfind_root:
+        spec = importlib.util.spec_from_file_location(
+            "ShockFind", os.path.join(shockfind_root, "__init__.py"),
+            submodule_search_locations=[shockfind_root])
+        pkg = importlib.util.module_from_spec(spec)
+        sys.modules["ShockFind"] = pkg
+        spec.loader.exec_module(pkg)
+    return pkg.shock_finder
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -124,14 +126,16 @@ def load_ramses_for_shockfind(
     info_path: str,
     box=None,
     box_units: str = "code",
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
     """
     Load RAMSES gas cell centres + MHD field values via yt.
 
     Returns
     -------
     positions : (N, 3) float64 — cell centres normalised to [0,1]^3
-    attrs     : (N, 8) float64 — columns in SHOCKFIND_FIELDS order
+    attrs     : (N, K) float64 — SHOCKFIND_FIELDS (K = 8), then each
+                _RAMSES_OPTIONAL_FIELDS entry present in the dataset
+    field_names : list[str] of length K — column names (build_octree registers them)
     """
     yt = _require("yt", "Install yt: pip install yt (or conda install -c conda-forge yt)")
 
@@ -485,7 +489,7 @@ def main():
         help="RAMSES output directory (e.g. output_00021/) or info_*.txt path. "
              "Not required when --load-octree is given.")
     parser.add_argument("-out", "--output", default=None,
-        help="Directory to save results (default: <data_path>/shockfind_results/)")
+        help="Directory to save results (default: shockfind_results/ next to the output_NNNNN directory)")
     parser.add_argument("-name", "--name", default=None,
         help="Run name used for the output file (default: derived from data_path)")
 

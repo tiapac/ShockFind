@@ -132,7 +132,8 @@ static std::shared_ptr<OctreeHandle> build_octree(
         pts.push_back(std::move(pt));
     }
 
-    tree.buildFromPoints(std::move(pts));  // includes computeOrderedLeaves() internally
+    tree.buildFromPoints(std::move(pts));
+    tree.ensureOrderedLeaves();  // buildFromPoints orders the leaves only when a node splits
 
     // Resolve field pointers by name
     auto res = [&](const std::vector<std::string>& candidates) -> const double* {
@@ -664,7 +665,8 @@ parallel to the handle's other derived arrays (div_v_arr, grad_rho_*).
           R"(
 Save the built octree to an HDF5 file.
 
-Persists: AMR node structure, per-leaf field data (density, pressure, vx/vy/vz, bx/by/bz),
+Persists: AMR node structure, every non-empty per-leaf field (the 8 MHD fields and any
+extra column given to build_octree, e.g. hydro_scalar_00),
 leaf ordering, and face-neighbour adjacency.  div_v and grad_rho are NOT saved (they
 are recomputed cheaply on load_octree()).  Requires USE_HDF5 at build time.
 

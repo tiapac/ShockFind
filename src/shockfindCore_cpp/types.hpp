@@ -177,6 +177,7 @@ struct LineProfile {
 // ─────────────────────────────────────────────────────────────────────────────
 // ShockResult — all output quantities for one shock candidate.
 // Matches the 17-column layout produced by the Python characterise_shocks.
+// The octree path appends level and volume (19 columns, bindings_octave.cpp).
 // ─────────────────────────────────────────────────────────────────────────────
 struct ShockResult {
     // Position (grid-cell indices, with offset applied)

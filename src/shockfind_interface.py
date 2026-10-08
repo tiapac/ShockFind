@@ -488,8 +488,8 @@ class shock_finder(core):
         Sshocks     = [xsS   * dx,ysS   * dx,zsS   * dx]
         Bohshocks   = [xsboh * dx,ysboh * dx,zsboh * dx]
         ###
-        Fpointers=[nxsS, nysS, nzsS]
-        Spointers=[nxsF, nysF, nzsF]
+        Fpointers=[nxsF, nysF, nzsF]
+        Spointers=[nxsS, nysS, nzsS]
         self.computed_shocks = [Fshocks, Sshocks, Bohshocks, Fpointers, Spointers]
         return self.computed_shocks, self.header
     
