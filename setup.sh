@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Builds the ShockFind C++ extensions inside the active conda environment.
+# Builds the ShockFind C++ extensions for $PYTHON (build.local; default python3).
 #
-# Usage:
-#   conda activate ytenv
+# Usage (this cluster, see GUIDE.md §0):
+#   module load GCC/14.3.0 OpenMPI/5.0.8 HDF5/1.14.6 Python/3.13.5
+#   source /mnt/beegfs/projects/hpcc250512a2/mpacicco/venvs/shockfind313/bin/activate
 #   ./setup.sh                          # serial build (shockfindCore_cpp only)
 #   ./setup.sh --mpi                    # MPI-enabled build
 #   ./setup.sh --octave                 # + Octave AMR octree backend (auto-detect path)
 #   ./setup.sh --octave /path/to/Octave/src   # + Octave with explicit src path
 #   ./setup.sh --clean                  # wipe all build dirs
 #
-# Machine-specific paths (MPI_HOME, MPIRUN, BUILD_TYPE, NPROC, OCTAVE_SRC_DIR)
+# Machine-specific paths (PYTHON, MPI_HOME, MPIRUN, BUILD_TYPE, NPROC, OCTAVE_SRC_DIR)
 # can be set in build.local (copy build.local.example and edit — it is gitignored).
 # Environment variables take precedence over build.local.
 #
-# To set up a fresh conda environment first:
-#   conda env create -f environment.yml && conda activate ytenv
+# Elsewhere: any Python with numpy, yt, pybind11, cmake (environment.yml is an old conda spec).
 
 set -euo pipefail
 
