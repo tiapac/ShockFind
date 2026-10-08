@@ -480,7 +480,7 @@ def run_octree_pipeline(
 # CLI — mirrors main_example.py usage
 # ─────────────────────────────────────────────────────────────────────────────
 
-def main():
+def main(argv=None):
     import argparse
     parser = argparse.ArgumentParser(
         description="ShockFind on a RAMSES output using Octave AMR octree (no uniform grid)",
@@ -575,7 +575,7 @@ def main():
     ctrl.add_argument("--plot",  action="store_true", help="Show 3D shock plot after analysis.")
     ctrl.add_argument("--quiet", action="store_true")
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Validate: need either a RAMSES path or a pre-built octree
     if not args.load and not args.load_octree and not args.data_path:
@@ -597,7 +597,7 @@ def main():
     if args.name:
         run_name = args.name
     elif args.data_path:
-        run_name = "octree_" + os.path.basename(data_path.rstrip("/"))
+        run_name = "octree_" + os.path.basename(data_path.rstrip("/")).removesuffix(".h5")  # output_NNNNN[.h5]
     else:
         run_name = "octree_" + os.path.splitext(os.path.basename(args.load_octree))[0]
 

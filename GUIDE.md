@@ -26,14 +26,20 @@ module load GCC/14.3.0 OpenMPI/5.0.8 HDF5/1.14.6 Python/3.13.5
 source /mnt/beegfs/projects/hpcc250512a2/mpacicco/venvs/shockfind313/bin/activate   # = loadShockFind in ~/.bashrc
 ```
 
-`venvs/shockfind313` (Python 3.13.5): numpy 2.5, scipy, yt 4.4.2, h5py, pybind11 3.1, cmake, mpi4py 4.1
-(built against OpenMPI 5.0.8), matplotlib, pyvista, astropy, pyxsim, soxs. `build.local` sets
+`venvs/shockfind313` (Python 3.13.5): numpy 2.5, scipy, h5py, pybind11 3.1, cmake, mpi4py 4.1
+(built against OpenMPI 5.0.8), matplotlib, pyvista, astropy, pyxsim, soxs, and **yt 4.5.dev0 from the
+patched checkout `/mnt/beegfs/users/mpacicco/yt`** (`site-packages/yt-dev.pth`; reads ramses_h5
+aggregates). Its Cython extensions are built in place for cp313 next to the cp310 ones of
+`venvs/yt-h5`; rebuild after editing them: `cd ~/yt && CC=gcc CXX=g++ $VENV/bin/python setup.py
+build_clib build_ext --inplace -j8` (GCC/14.3.0 loaded). Back to stock yt: `pip install yt==4.4.2`
+and delete `yt-dev.pth`. `build.local` sets
 `PYTHON=` to its python. `environment.yml` (conda `ytenv`) is historical: that env does not exist.
 
-**SLURM.** Submit with `sbatch --export=NONE`. The job then starts in a bare shell without the
-`module` command, so a job script must begin with
+**SLURM.** Submit with `sbatch --export=NONE`. The job then starts in a bare shell without
+`/usr/bin` on PATH (no `srun`, `ls`) and without the `module` command, so a job script must begin with
 
 ```bash
+export PATH=/usr/local/bin:/usr/bin:/bin${PATH:+:$PATH}
 source /usr/share/lmod/lmod/init/bash
 export MODULEPATH=/mnt/beegfs/appsx/modules/all/Core
 module purge
@@ -41,7 +47,8 @@ module load GCC/14.3.0 OpenMPI/5.0.8 HDF5/1.14.6 Python/3.13.5
 source /mnt/beegfs/projects/hpcc250512a2/mpacicco/venvs/shockfind313/bin/activate
 ```
 
-`run_neigh_hl.sbatch` and `run_xthin.sbatch` are working examples (partition `medium`; `short`'s nodes
+and run the step with `srun --export=ALL` (otherwise it inherits the bare environment and finds no
+`python`). `run_shockfind.sbatch` (any snapshot), `run_neigh_hl.sbatch` and `run_xthin.sbatch` are working examples (partition `medium`; `short`'s nodes
 were all down on 2026-10-08).
 
 **PYTHONPATH.** `~/.bashrc` appends `/mnt/beegfs/users/mpacicco`, where **another clone**,
@@ -60,6 +67,7 @@ is called. But a plain `from ShockFind import shock_finder` in your own script r
 |------|------|
 | `__init__.py` | Package entry: `from .src.shockfind_interface import shock_finder`. |
 | `main_example.py` | Reference driver for the **uniform-grid** path (yt cube → `shock_finder`). LB-specific, see §4. |
+| `run_shockfind.py`, `run_shockfind.sbatch` | One snapshot (directory or aggregated `.h5`) → `<name>_result.pk`; wraps the pipeline below. |
 | `src/octree_shockfind_pipeline.py` | CLI + library entry for the **AMR octree** path (RAMSES → octree → shocks). |
 | `src/arepo_octree_pipeline.py` | Arepo snapshot → Octave octree HDF5 (no shock finding), §7. |
 | `setup.sh` | Builds the C++ extensions: `--octave [OCTAVE_SRC]`, `--mpi`, `--clean`. |
@@ -173,6 +181,20 @@ always on), no `--rhomean` (so the 0.1 gradient fallback), **periodic** unless `
   (CMake does not track the Octave headers reliably).
 - Older `.so`s in `src/` (cpython-310/312, from the GCC 13.3 stack) cannot load in the current
   environment; Python only picks the one matching its ABI.
+
+### Run — one snapshot, the easy way (`run_shockfind.py`)
+```bash
+python run_shockfind.py /path/to/output_00801.h5      # aggregated snapshot (ramses_h5)
+python run_shockfind.py /path/to/output_00801         # classic directory
+sbatch --export=NONE run_shockfind.sbatch /path/to/output_00801.h5 [pipeline options]
+```
+Results go to `shockfind_results/` next to the snapshot, name `octree_output_00801`; every other
+option goes to the pipeline below unchanged. An `.h5` is read directly when yt has the ramses_h5
+reader (`venvs/shockfind313` does, §0); otherwise, or with `--reconstruct`, the directory is rebuilt
+byte for byte into `--scratch` (default `$TMPDIR`) with `ramses_h5_aggregate.py` (found via
+`--ramses-h5`, `$RAMSES_H5_DIR` or `../ramses_h5`), and deleted afterwards (`--keep-reconstructed`).
+Checked on CONDUCTION/output_00012: directory, direct `.h5` and reconstructed `.h5` give identical
+results (direct `.h5`: 21 s against 33 s for the directory, 8 cores).
 
 ### Run — AMR octree path
 ```bash

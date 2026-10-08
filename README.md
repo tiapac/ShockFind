@@ -5,6 +5,8 @@ This is an updated version of Shockfind, by [A. Lehmann [1]]([#1](https://doi.or
 **Start with [GUIDE.md](GUIDE.md)**: environment and build on this cluster (§0, §4), how candidates
 are selected (§3), the result format with units and FLAG/Family codes (§5), the C++ module API (§6).
 
+- One snapshot, directory or aggregated `.h5`: `python run_shockfind.py /path/to/output_NNNNN[.h5]`
+  (or `sbatch --export=NONE run_shockfind.sbatch ...`)
 - AMR octree path (RAMSES, recommended): `python src/octree_shockfind_pipeline.py /path/to/output_NNNNN`
 - Uniform-grid path: `main_example.py` (`shock_finder` class in `src/shockfind_interface.py`)
 - Arepo → octree HDF5 (no shock finding): `src/arepo_octree_pipeline.py`

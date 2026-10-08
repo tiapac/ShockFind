@@ -10,7 +10,8 @@
 # Submit with: sbatch --export=NONE run_neigh_hl.sbatch
 # Results: shockfind_results/ next to the output_NNNNN directory.
 
-# --export=NONE gives a bare shell: initialise Lmod before loading modules.
+# --export=NONE gives a bare shell (no /usr/bin on PATH, no `module`): set both up first.
+export PATH=/usr/local/bin:/usr/bin:/bin${PATH:+:$PATH}
 source /usr/share/lmod/lmod/init/bash
 export MODULEPATH=/mnt/beegfs/appsx/modules/all/Core
 module purge
@@ -19,4 +20,4 @@ source /mnt/beegfs/projects/hpcc250512a2/mpacicco/venvs/shockfind313/bin/activat
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
 cd /mnt/beegfs/projects/hpcc250512a2/mpacicco/codes/ShockFindOct
-srun -n 1 -c 36 python src/octree_shockfind_pipeline.py /mnt/beegfs/projects/hpcc250512a2/mpacicco/SimulationLocaBubble/LBDefault+neigh_hl/output_00801
+srun --export=ALL -n 1 -c 36 python src/octree_shockfind_pipeline.py /mnt/beegfs/projects/hpcc250512a2/mpacicco/SimulationLocaBubble/LBDefault+neigh_hl/output_00801
