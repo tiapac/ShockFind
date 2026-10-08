@@ -92,6 +92,7 @@ if [ "$USE_MPI" -eq 1 ]; then
     cmake -B "$CPP_DIR/build" -S "$CPP_DIR" \
           -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
           -Dpybind11_DIR="$PYBIND_DIR" \
+          -DPython_EXECUTABLE="$PYTHON" -DPYTHON_EXECUTABLE="$PYTHON" \
           -DUSE_MPI=ON \
           -DMPI_HOME="$MPI_HOME" \
           -DMPI_CXX_COMPILER="$MPI_HOME/bin/mpicxx" \
@@ -101,6 +102,7 @@ else
     cmake -B "$CPP_DIR/build" -S "$CPP_DIR" \
           -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
           -Dpybind11_DIR="$PYBIND_DIR" \
+          -DPython_EXECUTABLE="$PYTHON" -DPYTHON_EXECUTABLE="$PYTHON" \
           -DUSE_MPI=OFF \
           -Wno-dev
 fi
@@ -112,8 +114,8 @@ echo "==> shockfindCore_cpp done."
 if [ "$USE_OCTAVE" -eq 1 ]; then
     # Auto-detect Octave src if not set
     if [ -z "$OCTAVE_SRC" ]; then
-        # Common relative location: ShockFind/../../../Octave/src
-        CANDIDATE="$(cd "$SCRIPT_DIR" && cd ../../../Octave/src 2>/dev/null && pwd)" || true
+        # An Octave checkout next to this repository (codes/Octave next to codes/ShockFindOct)
+        CANDIDATE="$(cd "$SCRIPT_DIR" && cd ../Octave/src 2>/dev/null && pwd)" || true
         if [ -n "$CANDIDATE" ] && [ -f "$CANDIDATE/tree.hpp" ]; then
             OCTAVE_SRC="$CANDIDATE"
             echo "    Auto-detected Octave src: $OCTAVE_SRC"
@@ -129,6 +131,7 @@ if [ "$USE_OCTAVE" -eq 1 ]; then
     cmake -B "$OCT_DIR/build" -S "$OCT_DIR" \
           -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
           -Dpybind11_DIR="$PYBIND_DIR" \
+          -DPython_EXECUTABLE="$PYTHON" -DPYTHON_EXECUTABLE="$PYTHON" \
           -DOCTAVE_SRC_DIR="$OCTAVE_SRC" \
           -Wno-dev
     cmake --build "$OCT_DIR/build" -j"$NPROC"

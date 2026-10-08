@@ -10,8 +10,9 @@ find_package(pybind11 REQUIRED)
 # ── Octave source path ────────────────────────────────────────────────────────
 # Path to Octave's src/ directory containing tree.hpp, octree_params.hpp, etc.
 # Override at configure time with: cmake -DOCTAVE_SRC_DIR=/path/to/Octave/src
+# Default: an Octave checkout next to this repository (codes/Octave next to codes/ShockFindOct).
 if(NOT DEFINED OCTAVE_SRC_DIR)
-    set(OCTAVE_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../Octave/src"
+    set(OCTAVE_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../Octave/src"
         CACHE PATH "Path to Octave's src/ directory")
 endif()
 
@@ -56,10 +57,12 @@ endif()
 option(USE_HDF5 "Enable HDF5 persistence (save_octree / load_octree)" ON)
 
 if(USE_HDF5)
-    find_library(HDF5_CPP_LIB  hdf5_cpp  PATHS /usr/lib/x86_64-linux-gnu/hdf5/serial)
-    find_library(HDF5_LIB      hdf5      PATHS /usr/lib/x86_64-linux-gnu/hdf5/serial)
-    find_library(HDF5_HL_LIB   hdf5_hl   PATHS /usr/lib/x86_64-linux-gnu/hdf5/serial)
-    find_path(HDF5_INCLUDE_DIR H5Cpp.h   PATHS /usr/include/hdf5/serial)
+    # Needs the C++ API (libhdf5_cpp, H5Cpp.h). Searched in the loaded HDF5 module
+    # (EasyBuild sets EBROOTHDF5), CMAKE_PREFIX_PATH, the system, then Debian's serial dirs.
+    find_library(HDF5_CPP_LIB  hdf5_cpp  HINTS $ENV{EBROOTHDF5}/lib PATHS /usr/lib/x86_64-linux-gnu/hdf5/serial)
+    find_library(HDF5_LIB      hdf5      HINTS $ENV{EBROOTHDF5}/lib PATHS /usr/lib/x86_64-linux-gnu/hdf5/serial)
+    find_library(HDF5_HL_LIB   hdf5_hl   HINTS $ENV{EBROOTHDF5}/lib PATHS /usr/lib/x86_64-linux-gnu/hdf5/serial)
+    find_path(HDF5_INCLUDE_DIR H5Cpp.h   HINTS $ENV{EBROOTHDF5}/include PATHS /usr/include/hdf5/serial)
 
     if(HDF5_CPP_LIB AND HDF5_LIB AND HDF5_INCLUDE_DIR)
         message(STATUS "HDF5 found — save_octree/load_octree enabled")
